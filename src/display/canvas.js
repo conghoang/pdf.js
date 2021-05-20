@@ -27,7 +27,9 @@ import {
   Util,
   warn,
 } from "../shared/util.js";
+
 import { getShadingPattern, TilingPattern } from "./pattern_helper.js";
+import { picaResize, picaUnsharp } from "../shared/resize.js";
 
 // <canvas> contexts store most of the state we need natively.
 // However, PDF needs a bit more state, which we store here.
@@ -2477,7 +2479,6 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
 
       let paintWidth = width,
         paintHeight = height;
-      let tmpCanvasId = "prescale1";
       // Vertical or horizontal scaling shall not be more than 2 to not lose the
       // pixels during drawImage operation, painting on the temporary canvas(es)
       // that are twice smaller in size.
@@ -2495,29 +2496,25 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
           newHeight = Math.ceil(paintHeight / 2);
           heightScale /= paintHeight / newHeight;
         }
-        tmpCanvas = this.cachedCanvases.getCanvas(
-          tmpCanvasId,
-          newWidth,
-          newHeight
-        );
-        tmpCtx = tmpCanvas.context;
-        tmpCtx.clearRect(0, 0, newWidth, newHeight);
-        tmpCtx.drawImage(
-          imgToPaint,
-          0,
-          0,
-          paintWidth,
-          paintHeight,
-          0,
-          0,
-          newWidth,
-          newHeight
-        );
-        imgToPaint = tmpCanvas.canvas;
         paintWidth = newWidth;
         paintHeight = newHeight;
-        tmpCanvasId = tmpCanvasId === "prescale1" ? "prescale2" : "prescale1";
       }
+      const imgToPaintCtx = imgToPaint.getContext("2d");
+      const srcImgData = imgToPaintCtx.getImageData(0, 0, width, height);
+      const newImgData = picaResize({
+        src: srcImgData,
+        width,
+        height,
+        toWidth: paintWidth,
+        toHeight: paintHeight,
+        alpha: true,
+      });
+      picaUnsharp(newImgData, paintWidth, paintHeight, 100, 1, 1);
+      const newData = new ImageData(newImgData, paintWidth, paintHeight);
+      imgToPaint.width = paintWidth;
+      imgToPaint.height = paintHeight;
+      imgToPaintCtx.putImageData(newData, 0, 0);
+
       ctx.drawImage(
         imgToPaint,
         0,
