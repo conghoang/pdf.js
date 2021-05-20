@@ -309,6 +309,7 @@ function resetAlpha(dst, width, height) {
   }
 }
 function picaResize(options) {
+  // console.log("picaResize ", options);
   const src = options.src;
   const srcW = options.width;
   const srcH = options.height;
@@ -331,7 +332,7 @@ function picaResize(options) {
   // But src can be CanvasPixelArray, and tmp - Uint8Array. So, keep
   // vertical and horizontal passes separately to avoid deoptimization.
 
-  convolveHorizontally(src.data, tmp, srcW, srcH, destW, filtersX);
+  convolveHorizontally(src, tmp, srcW, srcH, destW, filtersX);
   convolveVertically(tmp, dest, srcH, destW, destH, filtersY);
 
   // That's faster than doing checks in convolver.

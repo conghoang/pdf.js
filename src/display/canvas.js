@@ -2463,7 +2463,7 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
         1
       );
 
-      let imgToPaint, tmpCanvas, tmpCtx;
+      let imgToPaint;
       // typeof check is needed due to node.js support, see issue #8489
       if (
         (typeof HTMLElement === "function" && imgData instanceof HTMLElement) ||
@@ -2471,8 +2471,12 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
       ) {
         imgToPaint = imgData;
       } else {
-        tmpCanvas = this.cachedCanvases.getCanvas("inlineImage", width, height);
-        tmpCtx = tmpCanvas.context;
+        const tmpCanvas = this.cachedCanvases.getCanvas(
+          "inlineImage",
+          width,
+          height
+        );
+        const tmpCtx = tmpCanvas.context;
         putBinaryImageData(tmpCtx, imgData, this.current.transferMaps);
         imgToPaint = tmpCanvas.canvas;
       }
@@ -2499,21 +2503,30 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
         paintWidth = newWidth;
         paintHeight = newHeight;
       }
-      const imgToPaintCtx = imgToPaint.getContext("2d");
-      const srcImgData = imgToPaintCtx.getImageData(0, 0, width, height);
-      const newImgData = picaResize({
-        src: srcImgData,
-        width,
-        height,
-        toWidth: paintWidth,
-        toHeight: paintHeight,
-        alpha: true,
-      });
-      picaUnsharp(newImgData, paintWidth, paintHeight, 100, 1, 1);
-      const newData = new ImageData(newImgData, paintWidth, paintHeight);
-      imgToPaint.width = paintWidth;
-      imgToPaint.height = paintHeight;
-      imgToPaintCtx.putImageData(newData, 0, 0);
+
+      if (paintWidth !== width || paintHeight !== height) {
+        const imgToPaintCtx = imgToPaint.getContext("2d");
+        const srcImgData = imgToPaintCtx.getImageData(0, 0, width, height);
+
+        const newImgData = picaResize({
+          src: srcImgData.data,
+          width,
+          height,
+          toWidth: paintWidth,
+          toHeight: paintHeight,
+          alpha: true,
+        });
+
+        picaUnsharp(newImgData, paintWidth, paintHeight, 100, 1, 1);
+
+        imgToPaint.width = paintWidth;
+        imgToPaint.height = paintHeight;
+        imgToPaintCtx.putImageData(
+          new ImageData(newImgData, paintWidth, paintHeight),
+          0,
+          0
+        );
+      }
 
       ctx.drawImage(
         imgToPaint,
