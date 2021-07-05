@@ -14,6 +14,11 @@
  */
 
 import {
+  createMatrix,
+  getShadingPattern,
+  TilingPattern,
+} from "./pattern_helper.js";
+import {
   FONT_IDENTITY_MATRIX,
   IDENTITY_MATRIX,
   ImageKind,
@@ -27,8 +32,6 @@ import {
   Util,
   warn,
 } from "../shared/util.js";
-
-import { getShadingPattern, TilingPattern } from "./pattern_helper.js";
 import { picaResize, picaUnsharp } from "../shared/resize.js";
 
 // <canvas> contexts store most of the state we need natively.
@@ -143,10 +146,10 @@ function addContextCurrentTransform(ctx) {
 
   ctx.scale = function ctxScale(x, y) {
     const m = this._transformMatrix;
-    m[0] = m[0] * x;
-    m[1] = m[1] * x;
-    m[2] = m[2] * y;
-    m[3] = m[3] * y;
+    m[0] *= x;
+    m[1] *= x;
+    m[2] *= y;
+    m[3] *= y;
 
     this._originalScale(x, y);
   };
@@ -195,6 +198,17 @@ function addContextCurrentTransform(ctx) {
   };
 }
 
+function getAdjustmentTransformation(transform, width, height) {
+  // The pattern will be created at the size of the current page or form object,
+  // but the mask is usually scaled differently and offset, so we must account
+  // for these to shift and rescale the pattern to the correctly location.
+  let patternTransform = createMatrix(transform);
+  patternTransform = patternTransform.scale(1 / width, -1 / height);
+  patternTransform = patternTransform.translate(0, -height);
+  patternTransform = patternTransform.inverse();
+  return patternTransform;
+}
+
 class CachedCanvases {
   constructor(canvasFactory) {
     this.canvasFactory = canvasFactory;
@@ -229,15 +243,15 @@ class CachedCanvases {
 
 function compileType3Glyph(imgData) {
   const POINT_TO_PROCESS_LIMIT = 1000;
+  const POINT_TYPES = new Uint8Array([
+    0, 2, 4, 0, 1, 0, 5, 4, 8, 10, 0, 8, 0, 2, 1, 0,
+  ]);
 
   const width = imgData.width,
     height = imgData.height,
     width1 = width + 1;
   let i, ii, j, j0;
   const points = new Uint8Array(width1 * (height + 1));
-  // prettier-ignore
-  const POINT_TYPES =
-      new Uint8Array([0, 2, 4, 0, 1, 0, 5, 4, 8, 10, 0, 8, 0, 2, 1, 0]);
 
   // decodes bit-packed mask data
   const lineSize = (width + 7) & ~7,
@@ -368,8 +382,7 @@ function compileType3Glyph(imgData) {
         points[p] &= (type >> 2) | (type << 2);
       }
 
-      coords.push(p % width1);
-      coords.push((p / width1) | 0);
+      coords.push(p % width1, (p / width1) | 0);
 
       if (!points[p]) {
         --count;
@@ -2297,8 +2310,16 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
 
       maskCtx.globalCompositeOperation = "source-in";
 
+      let patternTransform = null;
+      if (isPatternFill) {
+        patternTransform = getAdjustmentTransformation(
+          ctx.mozCurrentTransform,
+          width,
+          height
+        );
+      }
       maskCtx.fillStyle = isPatternFill
-        ? fillColor.getPattern(maskCtx, this)
+        ? fillColor.getPattern(maskCtx, this, false, patternTransform)
         : fillColor;
       maskCtx.fillRect(0, 0, width, height);
 
@@ -2335,14 +2356,23 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
 
       maskCtx.globalCompositeOperation = "source-in";
 
+      const ctx = this.ctx;
+      let patternTransform = null;
+      if (isPatternFill) {
+        patternTransform = getAdjustmentTransformation(
+          ctx.mozCurrentTransform,
+          width,
+          height
+        );
+      }
+
       maskCtx.fillStyle = isPatternFill
-        ? fillColor.getPattern(maskCtx, this)
+        ? fillColor.getPattern(maskCtx, this, false, patternTransform)
         : fillColor;
       maskCtx.fillRect(0, 0, width, height);
 
       maskCtx.restore();
 
-      const ctx = this.ctx;
       for (let i = 0, ii = positions.length; i < ii; i += 2) {
         ctx.save();
         ctx.transform(
@@ -2384,8 +2414,17 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
 
         maskCtx.globalCompositeOperation = "source-in";
 
+        let patternTransform = null;
+        if (isPatternFill) {
+          patternTransform = getAdjustmentTransformation(
+            ctx.mozCurrentTransform,
+            width,
+            height
+          );
+        }
+
         maskCtx.fillStyle = isPatternFill
-          ? fillColor.getPattern(maskCtx, this)
+          ? fillColor.getPattern(maskCtx, this, false, patternTransform)
           : fillColor;
         maskCtx.fillRect(0, 0, width, height);
 

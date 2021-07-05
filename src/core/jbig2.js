@@ -943,18 +943,20 @@ function decodePatternDictionary(
       y: 0,
     });
     if (template === 0) {
-      at.push({
-        x: -3,
-        y: -1,
-      });
-      at.push({
-        x: 2,
-        y: -2,
-      });
-      at.push({
-        x: -2,
-        y: -2,
-      });
+      at.push(
+        {
+          x: -3,
+          y: -1,
+        },
+        {
+          x: 2,
+          y: -2,
+        },
+        {
+          x: -2,
+          y: -2,
+        }
+      );
     }
   }
   const collectiveWidth = (maxPatternIndex + 1) * patternWidth;
@@ -1034,18 +1036,20 @@ function decodeHalftoneRegion(
       y: -1,
     });
     if (template === 0) {
-      at.push({
-        x: -3,
-        y: -1,
-      });
-      at.push({
-        x: 2,
-        y: -2,
-      });
-      at.push({
-        x: -2,
-        y: -2,
-      });
+      at.push(
+        {
+          x: -3,
+          y: -1,
+        },
+        {
+          x: 2,
+          y: -2,
+        },
+        {
+          x: -2,
+          y: -2,
+        }
+      );
     }
   }
   // Annex C. Gray-scale Image Decoding Procedure.
@@ -1084,7 +1088,7 @@ function decodeHalftoneRegion(
       bit = 0;
       patternIndex = 0;
       for (j = bitsPerValue - 1; j >= 0; j--) {
-        bit = grayScaleBitPlanes[j][mg][ng] ^ bit; // Gray decoding
+        bit ^= grayScaleBitPlanes[j][mg][ng]; // Gray decoding
         patternIndex |= bit << j;
       }
       patternBitmap = patterns[patternIndex];

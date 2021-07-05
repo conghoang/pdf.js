@@ -6,6 +6,7 @@
 
   "plugins": [
     "import",
+    "json",
     "mozilla",
     "no-unsanitized",
     "sort-exports",
@@ -13,6 +14,7 @@
   ],
 
   "extends": [
+    "plugin:json/recommended",
     "plugin:prettier/recommended"
   ],
 
@@ -43,6 +45,7 @@
       "ignoreCase": true,
     }],
     "unicorn/no-abusive-eslint-disable": "error",
+    "unicorn/no-array-push-push": "error",
     "unicorn/no-instanceof-array": "error",
     "unicorn/prefer-string-starts-ends-with": "error",
 
@@ -164,6 +167,10 @@
     "no-new-object": "error",
     "no-restricted-syntax": ["error",
       {
+        "selector": "BinaryExpression[operator='instanceof'][right.name='Object']",
+        "message": "Use `typeof` rather than `instanceof Object`.",
+      },
+      {
         "selector": "CallExpression[callee.name='assert'][arguments.length!=2]",
         "message": "`assert()` must always be invoked with two arguments.",
       },
@@ -181,6 +188,7 @@
       },
     ],
     "no-unneeded-ternary": "error",
+    "operator-assignment": "error",
     "prefer-exponentiation-operator": "error",
     "spaced-comment": ["error", "always", {
       "block": {

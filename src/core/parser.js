@@ -635,9 +635,9 @@ class Parser {
       this.shift(); // 'stream'
     } else {
       // Bad stream length, scanning for endstream command.
-      // prettier-ignore
       const ENDSTREAM_SIGNATURE = new Uint8Array([
-        0x65, 0x6E, 0x64, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6D]);
+        0x65, 0x6e, 0x64, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d,
+      ]);
       let actualLength = this._findStreamLength(startPos, ENDSTREAM_SIGNATURE);
       if (actualLength < 0) {
         // Only allow limited truncation of the endstream signature,
@@ -1113,6 +1113,9 @@ class Lexer {
     }
     if (strBuf.length > 127) {
       warn(`Name token is longer than allowed by the spec: ${strBuf.length}`);
+    } else if (strBuf.length === 0) {
+      warn("Name token is empty.");
+      return Name.empty;
     }
     return Name.get(strBuf.join(""));
   }

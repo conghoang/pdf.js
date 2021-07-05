@@ -40,6 +40,7 @@ import {
   deprecated,
   DOMCanvasFactory,
   DOMCMapReaderFactory,
+  DOMStandardFontDataFactory,
   isDataScheme,
   loadScript,
   PageViewport,
@@ -47,9 +48,12 @@ import {
   StatTimer,
 } from "./display_utils.js";
 import { FontFaceObject, FontLoader } from "./font_loader.js";
-import { NodeCanvasFactory, NodeCMapReaderFactory } from "./node_utils.js";
+import {
+  NodeCanvasFactory,
+  NodeCMapReaderFactory,
+  NodeStandardFontDataFactory,
+} from "./node_utils.js";
 import { AnnotationStorage } from "./annotation_storage.js";
-import { apiCompatibilityParams } from "./api_compatibility.js";
 import { CanvasGraphics } from "./canvas.js";
 import { GlobalWorkerOptions } from "./worker_options.js";
 import { isNodeJS } from "../shared/is_node.js";
@@ -69,6 +73,10 @@ const DefaultCMapReaderFactory =
   (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) && isNodeJS
     ? NodeCMapReaderFactory
     : DOMCMapReaderFactory;
+const DefaultStandardFontDataFactory =
+  (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) && isNodeJS
+    ? NodeStandardFontDataFactory
+    : DOMStandardFontDataFactory;
 
 /**
  * @typedef {function} IPDFStreamFactory
@@ -104,6 +112,12 @@ function setPDFNetworkStreamFactory(pdfNetworkStreamFactory) {
  *            Int32Array | Uint32Array | Float32Array |
  *            Float64Array
  * } TypedArray
+ */
+
+/**
+ * @typedef {Object} RefProxy
+ * @property {number} num
+ * @property {number} gen
  */
 
 /**
@@ -143,6 +157,21 @@ function setPDFNetworkStreamFactory(pdfNetworkStreamFactory) {
  *   reading built-in CMap files. Providing a custom factory is useful for
  *   environments without Fetch API or `XMLHttpRequest` support, such as
  *   Node.js. The default value is {DOMCMapReaderFactory}.
+ * @property {boolean} [useSystemFonts] - When `true`, fonts that aren't
+ *   embedded in the PDF document will fallback to a system font.
+ *   The default value is `true` in web environments and `false` in Node.js;
+ *   unless `disableFontFace === true` in which case this defaults to `false`
+ *   regardless of the environment (to prevent completely broken fonts).
+ * @property {string} [standardFontDataUrl] - The URL where the standard font
+ *   files are located. Include the trailing slash.
+ * @property {Object} [StandardFontDataFactory] - The factory that will be used
+ *   when reading the standard font files. Providing a custom factory is useful
+ *   for environments without Fetch API or `XMLHttpRequest` support, such as
+ *   Node.js. The default value is {DOMStandardFontDataFactory}.
+ * @property {boolean} [useWorkerFetch] - Enable using the Fetch API in the
+ *   worker-thread when reading CMap and standard font files. When `true`,
+ *   the `CMapReaderFactory` and `StandardFontDataFactory` options are ignored.
+ *   The default value is `true` in web environments and `false` in Node.js.
  * @property {boolean} [stopAtErrors] - Reject certain promises, e.g.
  *   `getOperatorList`, `getTextContent`, and `RenderTask`, when the associated
  *   PDF data cannot be successfully parsed, instead of attempting to recover
@@ -154,9 +183,10 @@ function setPDFNetworkStreamFactory(pdfNetworkStreamFactory) {
  *   as JavaScript. Primarily used to improve performance of font rendering, and
  *   when parsing PDF functions. The default value is `true`.
  * @property {boolean} [disableFontFace] - By default fonts are converted to
- *   OpenType fonts and loaded via `@font-face` rules. If disabled, fonts will
- *   be rendered using a built-in font renderer that constructs the glyphs with
- *   primitive path commands. The default value is `false`.
+ *   OpenType fonts and loaded via the Font Loading API or `@font-face` rules.
+ *   If disabled, fonts will be rendered using a built-in font renderer that
+ *   constructs the glyphs with primitive path commands.
+ *   The default value is `false` in web environments and `true` in Node.js.
  * @property {boolean} [fontExtraProperties] - Include additional properties,
  *   which are unused during rendering of PDF documents, when exporting the
  *   parsed font data from the worker-thread. This may be useful for debugging
@@ -287,6 +317,8 @@ function getDocument(src) {
   params.rangeChunkSize = params.rangeChunkSize || DEFAULT_RANGE_CHUNK_SIZE;
   params.CMapReaderFactory =
     params.CMapReaderFactory || DefaultCMapReaderFactory;
+  params.StandardFontDataFactory =
+    params.StandardFontDataFactory || DefaultStandardFontDataFactory;
   params.ignoreErrors = params.stopAtErrors !== true;
   params.fontExtraProperties = params.fontExtraProperties === true;
   params.pdfBug = params.pdfBug === true;
@@ -304,11 +336,24 @@ function getDocument(src) {
   if (!Number.isInteger(params.maxImageSize)) {
     params.maxImageSize = -1;
   }
+  if (typeof params.useWorkerFetch !== "boolean") {
+    params.useWorkerFetch =
+      params.CMapReaderFactory === DOMCMapReaderFactory &&
+      params.StandardFontDataFactory === DOMStandardFontDataFactory;
+  }
   if (typeof params.isEvalSupported !== "boolean") {
     params.isEvalSupported = true;
   }
   if (typeof params.disableFontFace !== "boolean") {
-    params.disableFontFace = apiCompatibilityParams.disableFontFace || false;
+    params.disableFontFace =
+      (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) && isNodeJS;
+  }
+  if (typeof params.useSystemFonts !== "boolean") {
+    params.useSystemFonts =
+      !(
+        (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) &&
+        isNodeJS
+      ) && !params.disableFontFace;
   }
   if (typeof params.ownerDocument === "undefined") {
     params.ownerDocument = globalThis.document;
@@ -455,6 +500,11 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
       isEvalSupported: source.isEvalSupported,
       fontExtraProperties: source.fontExtraProperties,
       enableXfa: source.enableXfa,
+      useSystemFonts: source.useSystemFonts,
+      cMapUrl: source.useWorkerFetch ? source.cMapUrl : null,
+      standardFontDataUrl: source.useWorkerFetch
+        ? source.standardFontDataUrl
+        : null,
     })
     .then(function (workerId) {
       if (worker.destroyed) {
@@ -463,6 +513,12 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
       return workerId;
     });
 }
+
+/**
+ * @typedef {Object} OnProgressParameters
+ * @property {number} loaded - Currently loaded number of bytes.
+ * @property {number} total - Total number of bytes in the PDF file.
+ */
 
 /**
  * The loading task controls the operations required to load a PDF document
@@ -478,8 +534,7 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
  *   {@link PasswordResponses}).
  * @property {function} [onProgress] - Callback to be able to monitor the
  *   loading progress of the PDF file (necessary to implement e.g. a loading
- *   bar). The callback receives an {Object} with the properties `loaded`
- *   ({number}) and `total` ({number}) that indicate how many bytes are loaded.
+ *   bar). The callback receives an {@link OnProgressParameters} argument.
  * @property {function} [onUnsupportedFeature] - Callback for when an
  *   unsupported feature is used in the PDF document. The callback receives an
  *   {@link UNSUPPORTED_FEATURES} argument.
@@ -531,9 +586,8 @@ const PDFDocumentLoadingTask = (function PDFDocumentLoadingTaskClosure() {
 
       /**
        * Callback to be able to monitor the loading progress of the PDF file
-       * (necessary to implement e.g. a loading bar). The callback receives
-       * an {Object} with the properties `loaded` ({number}) and `total`
-       * ({number}) that indicate how many bytes are loaded.
+       * (necessary to implement e.g. a loading bar).
+       * The callback receives an {@link OnProgressParameters} argument.
        * @type {function}
        */
       this.onProgress = null;
@@ -668,6 +722,18 @@ class PDFDocumentProxy {
   constructor(pdfInfo, transport) {
     this._pdfInfo = pdfInfo;
     this._transport = transport;
+
+    if (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) {
+      Object.defineProperty(this, "fingerprint", {
+        get() {
+          deprecated(
+            "`PDFDocumentProxy.fingerprint`, " +
+              "please use `PDFDocumentProxy.fingerprints` instead."
+          );
+          return this.fingerprints[0];
+        },
+      });
+    }
   }
 
   /**
@@ -685,17 +751,30 @@ class PDFDocumentProxy {
   }
 
   /**
-   * @type {string} A (not guaranteed to be) unique ID to identify a PDF.
+   * @type {Array<string, string|null>} A (not guaranteed to be) unique ID to
+   *   identify the PDF document.
+   *   NOTE: The first element will always be defined for all PDF documents,
+   *   whereas the second element is only defined for *modified* PDF documents.
    */
-  get fingerprint() {
-    return this._pdfInfo.fingerprint;
+  get fingerprints() {
+    return this._pdfInfo.fingerprints;
   }
 
   /**
    * @type {boolean} True if only XFA form.
    */
   get isPureXfa() {
-    return this._pdfInfo.isPureXfa;
+    return !!this._transport._htmlForXfa;
+  }
+
+  /**
+   * NOTE: This is (mostly) intended to support printing of XFA forms.
+   *
+   * @type {Object | null} An object representing a HTML tree structure
+   *   to render the XFA, or `null` when no XFA form exists.
+   */
+  get allXfaHtml() {
+    return this._transport._htmlForXfa;
   }
 
   /**
@@ -708,11 +787,9 @@ class PDFDocumentProxy {
   }
 
   /**
-   * @param {{num: number, gen: number}} ref - The page reference. Must have
-   *   the `num` and `gen` properties.
-   * @returns {Promise<{num: number, gen: number}>} A promise that is resolved
-   *   with the page index (starting from zero) that is associated with the
-   *   reference.
+   * @param {RefProxy} ref - The page reference.
+   * @returns {Promise<number>} A promise that is resolved with the page index,
+   *   starting from zero, that is associated with the reference.
    */
   getPageIndex(ref) {
     return this._transport.getPageIndex(ref);
@@ -730,8 +807,9 @@ class PDFDocumentProxy {
 
   /**
    * @param {string} id - The named destination to get.
-   * @returns {Promise<Array<any>>} A promise that is resolved with all
-   *   information of the given named destination.
+   * @returns {Promise<Array<any> | null>} A promise that is resolved with all
+   *   information of the given named destination, or `null` when the named
+   *   destination is not present in the PDF file.
    */
   getDestination(id) {
     return this._transport.getDestination(id);
@@ -938,8 +1016,7 @@ class PDFDocumentProxy {
 
   /**
    * @type {DocumentInitParameters} A subset of the current
-   *   {DocumentInitParameters}, which are either needed in the viewer and/or
-   *   whose default values may be affected by the `apiCompatibilityParams`.
+   *   {DocumentInitParameters}, which are needed in the viewer.
    */
   get loadingParams() {
     return this._transport.loadingParams;
@@ -957,12 +1034,6 @@ class PDFDocumentProxy {
    *   {Uint8Array} containing the full data of the saved document.
    */
   saveDocument() {
-    if (
-      (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) &&
-      arguments.length > 0
-    ) {
-      deprecated("saveDocument no longer accepts any options.");
-    }
     if (
       (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) &&
       this._transport.annotationStorage.size <= 0
@@ -1050,7 +1121,8 @@ class PDFDocumentProxy {
  * @property {number} width - Width in device space.
  * @property {number} height - Height in device space.
  * @property {string} fontName - Font name used by PDF.js for converted font.
- *
+ * @property {boolean} hasEOL - Indicating if the text content is followed by a
+ *   line-break.
  */
 
 /**
@@ -1178,8 +1250,7 @@ class PDFPageProxy {
   }
 
   /**
-   * @type {Object} The reference that points to this page. It has `num` and
-   *   `gen` properties.
+   * @type {RefProxy | null} The reference that points to this page.
    */
   get ref() {
     return this._pageInfo.ref;
@@ -1254,8 +1325,8 @@ class PDFPageProxy {
    *   are {Object} with a name, attributes (class, style, ...), value and
    *   children, very similar to a HTML DOM tree), or `null` if no XFA exists.
    */
-  getXfa() {
-    return (this._xfaPromise ||= this._transport.getPageXfa(this._pageIndex));
+  async getXfa() {
+    return this._transport._htmlForXfa?.children[this._pageIndex] || null;
   }
 
   /**
@@ -1277,16 +1348,6 @@ class PDFPageProxy {
     includeAnnotationStorage = false,
     optionalContentConfigPromise = null,
   }) {
-    if (
-      (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) &&
-      arguments[0]?.annotationStorage !== undefined
-    ) {
-      deprecated(
-        "render no longer accepts an `annotationStorage` option, " +
-          "please use the `includeAnnotationStorage`-boolean instead."
-      );
-      includeAnnotationStorage ||= !!arguments[0].annotationStorage;
-    }
     if (this._stats) {
       this._stats.time("Overall");
     }
@@ -1551,7 +1612,6 @@ class PDFPageProxy {
     this.objs.clear();
     this._annotationsPromise = null;
     this._jsActionsPromise = null;
-    this._xfaPromise = null;
     this._structTreePromise = null;
     this.pendingCleanup = false;
     return Promise.all(waitOn);
@@ -1587,7 +1647,6 @@ class PDFPageProxy {
     this.objs.clear();
     this._annotationsPromise = null;
     this._jsActionsPromise = null;
-    this._xfaPromise = null;
     this._structTreePromise = null;
     if (resetStats && this._stats) {
       this._stats = new StatTimer();
@@ -1761,6 +1820,16 @@ class LoopbackPort {
     function cloneValue(value) {
       // Trying to perform a structured clone close to the spec, including
       // transfers.
+      if (
+        typeof value === "function" ||
+        typeof value === "symbol" ||
+        value instanceof URL
+      ) {
+        throw new Error(
+          `LoopbackPort.postMessage - cannot clone: ${value?.toString()}`
+        );
+      }
+
       if (typeof value !== "object" || value === null) {
         return value;
       }
@@ -1799,7 +1868,7 @@ class LoopbackPort {
         }
         return result;
       }
-      result = Array.isArray(value) ? [] : {};
+      result = Array.isArray(value) ? [] : Object.create(null);
       cloned.set(value, result); // Adding to cache now for cyclic references.
       // Cloning all value and object properties, however ignoring properties
       // defined via getter.
@@ -1812,12 +1881,7 @@ class LoopbackPort {
         if (typeof desc.value === "undefined") {
           continue;
         }
-        if (typeof desc.value === "function") {
-          if (value.hasOwnProperty?.(i)) {
-            throw new Error(
-              `LoopbackPort.postMessage - cannot clone: ${value[i]}`
-            );
-          }
+        if (typeof desc.value === "function" && !value.hasOwnProperty?.(i)) {
           continue;
         }
         result[i] = cloneValue(desc.value);
@@ -2238,12 +2302,19 @@ class WorkerTransport {
       docId: loadingTask.docId,
       onUnsupportedFeature: this._onUnsupportedFeature.bind(this),
       ownerDocument: params.ownerDocument,
+      styleElement: params.styleElement,
     });
     this._params = params;
-    this.CMapReaderFactory = new params.CMapReaderFactory({
-      baseUrl: params.cMapUrl,
-      isCompressed: params.cMapPacked,
-    });
+
+    if (!params.useWorkerFetch) {
+      this.CMapReaderFactory = new params.CMapReaderFactory({
+        baseUrl: params.cMapUrl,
+        isCompressed: params.cMapPacked,
+      });
+      this.StandardFontDataFactory = new params.StandardFontDataFactory({
+        baseUrl: params.standardFontDataUrl,
+      });
+    }
 
     this.destroyed = false;
     this.destroyCapability = null;
@@ -2452,6 +2523,8 @@ class WorkerTransport {
 
     messageHandler.on("GetDoc", ({ pdfInfo }) => {
       this._numPages = pdfInfo.numPages;
+      this._htmlForXfa = pdfInfo.htmlForXfa;
+      delete pdfInfo.htmlForXfa;
       loadingTask._capability.resolve(new PDFDocumentProxy(pdfInfo, this));
     });
 
@@ -2640,28 +2713,32 @@ class WorkerTransport {
       this._onUnsupportedFeature.bind(this)
     );
 
-    messageHandler.on("FetchBuiltInCMap", (data, sink) => {
+    messageHandler.on("FetchBuiltInCMap", data => {
       if (this.destroyed) {
-        sink.error(new Error("Worker was destroyed"));
-        return;
+        return Promise.reject(new Error("Worker was destroyed."));
       }
-      let fetched = false;
+      if (!this.CMapReaderFactory) {
+        return Promise.reject(
+          new Error(
+            "CMapReaderFactory not initialized, see the `useWorkerFetch` parameter."
+          )
+        );
+      }
+      return this.CMapReaderFactory.fetch(data);
+    });
 
-      sink.onPull = () => {
-        if (fetched) {
-          sink.close();
-          return;
-        }
-        fetched = true;
-
-        this.CMapReaderFactory.fetch(data)
-          .then(function (builtInCMap) {
-            sink.enqueue(builtInCMap, 1, [builtInCMap.cMapData.buffer]);
-          })
-          .catch(function (reason) {
-            sink.error(reason);
-          });
-      };
+    messageHandler.on("FetchStandardFontData", data => {
+      if (this.destroyed) {
+        return Promise.reject(new Error("Worker was destroyed."));
+      }
+      if (!this.StandardFontDataFactory) {
+        return Promise.reject(
+          new Error(
+            "StandardFontDataFactory not initialized, see the `useWorkerFetch` parameter."
+          )
+        );
+      }
+      return this.StandardFontDataFactory.fetch(data);
     });
   }
 
@@ -2733,6 +2810,7 @@ class WorkerTransport {
   saveDocument() {
     return this.messageHandler
       .sendWithPromise("SaveDocument", {
+        isPureXfa: !!this._htmlForXfa,
         numPages: this._numPages,
         annotationStorage: this.annotationStorage.serializable,
         filename: this._fullReader?.filename ?? null,
@@ -2808,12 +2886,6 @@ class WorkerTransport {
     });
   }
 
-  getPageXfa(pageIndex) {
-    return this.messageHandler.sendWithPromise("GetPageXfa", {
-      pageIndex,
-    });
-  }
-
   getStructTree(pageIndex) {
     return this.messageHandler.sendWithPromise("GetStructTree", {
       pageIndex,
@@ -2885,7 +2957,6 @@ class WorkerTransport {
     const params = this._params;
     return shadow(this, "loadingParams", {
       disableAutoFetch: params.disableAutoFetch,
-      disableFontFace: params.disableFontFace,
     });
   }
 }
@@ -3188,6 +3259,7 @@ export {
   build,
   DefaultCanvasFactory,
   DefaultCMapReaderFactory,
+  DefaultStandardFontDataFactory,
   getDocument,
   LoopbackPort,
   PDFDataRangeTransport,

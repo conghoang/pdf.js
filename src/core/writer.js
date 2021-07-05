@@ -35,8 +35,7 @@ function writeStream(stream, buffer, transform) {
   if (transform !== null) {
     string = transform.encryptString(string);
   }
-  buffer.push(string);
-  buffer.push("\nendstream\n");
+  buffer.push(string, "\nendstream\n");
 }
 
 function writeArray(array, buffer, transform) {
@@ -124,12 +123,7 @@ function computeMD5(filesize, xrefInfo) {
   return bytesToString(calculateMD5(array));
 }
 
-function updateXFA(datasetsRef, newRefs, xref) {
-  if (datasetsRef === null || xref === null) {
-    return;
-  }
-  const datasets = xref.fetchIfRef(datasetsRef);
-  const str = datasets.getString();
+function writeXFADataForAcroform(str, newRefs) {
   const xml = new SimpleXMLParser({ hasAttributes: true }).parseFromString(str);
 
   for (const { xfa } of newRefs) {
@@ -149,7 +143,17 @@ function updateXFA(datasetsRef, newRefs, xref) {
   }
   const buffer = [];
   xml.documentElement.dump(buffer);
-  let updatedXml = buffer.join("");
+  return buffer.join("");
+}
+
+function updateXFA(xfaData, datasetsRef, newRefs, xref) {
+  if (datasetsRef === null || xref === null) {
+    return;
+  }
+  if (xfaData === null) {
+    const datasets = xref.fetchIfRef(datasetsRef);
+    xfaData = writeXFADataForAcroform(datasets.getString(), newRefs);
+  }
 
   const encrypt = xref.encrypt;
   if (encrypt) {
@@ -157,12 +161,12 @@ function updateXFA(datasetsRef, newRefs, xref) {
       datasetsRef.num,
       datasetsRef.gen
     );
-    updatedXml = transform.encryptString(updatedXml);
+    xfaData = transform.encryptString(xfaData);
   }
   const data =
     `${datasetsRef.num} ${datasetsRef.gen} obj\n` +
-    `<< /Type /EmbeddedFile /Length ${updatedXml.length}>>\nstream\n` +
-    updatedXml +
+    `<< /Type /EmbeddedFile /Length ${xfaData.length}>>\nstream\n` +
+    xfaData +
     "\nendstream\nendobj\n";
 
   newRefs.push({ ref: datasetsRef, data });
@@ -174,8 +178,9 @@ function incrementalUpdate({
   newRefs,
   xref = null,
   datasetsRef = null,
+  xfaData = null,
 }) {
-  updateXFA(datasetsRef, newRefs, xref);
+  updateXFA(xfaData, datasetsRef, newRefs, xref);
 
   const newXref = new Dict(null);
   const refForXrefTable = xrefInfo.newRef;
@@ -219,8 +224,7 @@ function incrementalUpdate({
     maxOffset = Math.max(maxOffset, baseOffset);
     xrefTableData.push([1, baseOffset, Math.min(ref.gen, 0xffff)]);
     baseOffset += data.length;
-    indexes.push(ref.num);
-    indexes.push(1);
+    indexes.push(ref.num, 1);
     buffer.push(data);
   }
 

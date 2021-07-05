@@ -20,6 +20,7 @@ import {
   unreachable,
   Util,
 } from "../shared/util.js";
+import { DOMSVGFactory } from "./display_utils.js";
 
 let svgElement;
 
@@ -29,7 +30,8 @@ function createMatrix(matrix) {
     return new DOMMatrix(matrix);
   }
   if (!svgElement) {
-    svgElement = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const svgFactory = new DOMSVGFactory();
+    svgElement = svgFactory.createElement("svg");
   }
   return svgElement.createSVGMatrix(matrix);
 }
@@ -70,11 +72,11 @@ class RadialAxialShadingPattern extends BaseShadingPattern {
     this._matrix = IR[8];
   }
 
-  getPattern(ctx, owner, shadingFill) {
+  getPattern(ctx, owner, shadingFill = false, patternTransform = null) {
     const tmpCanvas = owner.cachedCanvases.getCanvas(
       "pattern",
-      ctx.canvas.width,
-      ctx.canvas.height,
+      owner.ctx.canvas.width,
+      owner.ctx.canvas.height,
       true
     );
 
@@ -119,7 +121,11 @@ class RadialAxialShadingPattern extends BaseShadingPattern {
     tmpCtx.fill();
 
     const pattern = ctx.createPattern(tmpCanvas.canvas, "repeat");
-    pattern.setTransform(createMatrix(ctx.mozCurrentTransformInverse));
+    if (patternTransform) {
+      pattern.setTransform(patternTransform);
+    } else {
+      pattern.setTransform(createMatrix(ctx.mozCurrentTransformInverse));
+    }
     return pattern;
   }
 }
@@ -374,7 +380,7 @@ class MeshShadingPattern extends BaseShadingPattern {
     };
   }
 
-  getPattern(ctx, owner, shadingFill) {
+  getPattern(ctx, owner, shadingFill = false, patternTransform = null) {
     applyBoundingBox(ctx, this._bbox);
     let scale;
     if (shadingFill) {
@@ -597,7 +603,7 @@ class TilingPattern {
     }
   }
 
-  getPattern(ctx, owner, shadingFill) {
+  getPattern(ctx, owner, shadingFill = false, patternTransform = null) {
     ctx = this.ctx;
     // PDF spec 8.7.2 NOTE 1: pattern's matrix is relative to initial matrix.
     let matrix = ctx.mozCurrentTransformInverse;
@@ -625,4 +631,4 @@ class TilingPattern {
   }
 }
 
-export { getShadingPattern, TilingPattern };
+export { createMatrix, getShadingPattern, TilingPattern };
