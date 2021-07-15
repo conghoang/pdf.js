@@ -105,7 +105,7 @@ class BaseFontLoader {
     }
 
     // !this.isFontLoadingAPISupported
-    const rule = font.createFontFaceRule();
+    const rule = await font.createFontFaceRule();
     if (rule) {
       this.insertRule(rule);
 
@@ -408,7 +408,7 @@ class FontFaceObject {
     return nativeFontFace;
   }
 
-  createFontFaceRule() {
+  async createFontFaceRule() {
     if (!this.data || this.disableFontFace) {
       return null;
     }
@@ -424,6 +424,15 @@ class FontFaceObject {
         css += `font-style: oblique ${this.cssFontInfo.italicAngle}deg;`;
       }
       rule = `@font-face {font-family:"${this.cssFontInfo.fontFamily}";${css}src:${url}}`;
+    }
+    if (typeof self !== "undefined" && typeof self.document === "undefined") {
+      const fontFace = new FontFace(
+        this.loadedName,
+        `url(data:${this.mimetype};base64,${btoa(data)})`,
+      );
+      self.fonts.add(fontFace);
+      // load the font
+      await fontFace.load();
     }
 
     if (this.fontRegistry) {

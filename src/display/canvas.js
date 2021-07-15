@@ -2556,7 +2556,7 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
           alpha: true,
         });
 
-        picaUnsharp(newImgData, paintWidth, paintHeight, 100, 1, 1);
+        // picaUnsharp(newImgData, paintWidth, paintHeight, 100, 1, 1);
 
         imgToPaint.width = paintWidth;
         imgToPaint.height = paintHeight;
