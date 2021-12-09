@@ -27,16 +27,13 @@ import {
   Util,
   warn,
 } from "../shared/util.js";
-<<<<<<< HEAD
-import { picaResize, picaUnsharp } from "../shared/resize.js";
-=======
 import {
   getShadingPattern,
   PathType,
   TilingPattern,
 } from "./pattern_helper.js";
 import { PixelsPerInch } from "./display_utils.js";
->>>>>>> 97dc048e56f3026d82e59d013914a1151a57d3ee
+import { resizeAndUnsharp } from "../shared/resize";
 
 // <canvas> contexts store most of the state we need natively.
 // However, PDF needs a bit more state, which we store here.
@@ -1275,6 +1272,7 @@ class CanvasGraphics {
     // that are twice smaller in size.
     const width = img.width;
     const height = img.height;
+
     let widthScale = Math.max(
       Math.hypot(inverseTransform[0], inverseTransform[1]),
       1
@@ -1284,47 +1282,38 @@ class CanvasGraphics {
       1
     );
 
-    let paintWidth = width,
-      paintHeight = height;
+    let paintWidth = Math.round(width / widthScale),
+      paintHeight = Math.round(height / heightScale);
     let tmpCanvasId = "prescale1";
     let tmpCanvas, tmpCtx;
-    while (
-      (widthScale > 2 && paintWidth > 1) ||
-      (heightScale > 2 && paintHeight > 1)
-    ) {
-      let newWidth = paintWidth,
-        newHeight = paintHeight;
-      if (widthScale > 2 && paintWidth > 1) {
-        newWidth = Math.ceil(paintWidth / 2);
-        widthScale /= paintWidth / newWidth;
-      }
-      if (heightScale > 2 && paintHeight > 1) {
-        newHeight = Math.ceil(paintHeight / 2);
-        heightScale /= paintHeight / newHeight;
-      }
-      tmpCanvas = this.cachedCanvases.getCanvas(
-        tmpCanvasId,
-        newWidth,
-        newHeight
+
+    tmpCanvas = this.cachedCanvases.getCanvas(
+      tmpCanvasId,
+      paintWidth,
+      paintHeight
+    );
+    tmpCanvas.width = paintWidth;
+    tmpCanvas.height = paintHeight;
+    const imgToPaintCtx = img.getContext("2d");
+    const srcImgData = imgToPaintCtx.getImageData(0, 0, width, height);
+
+    const newImgData = resizeAndUnsharp({
+      src: srcImgData.data,
+      width,
+      height,
+      toWidth: paintWidth,
+      toHeight: paintHeight,
+      alpha: true,
+    });
+
+    tmpCtx = tmpCanvas.context;
+
+    tmpCtx.putImageData(
+      new ImageData(new Uint8ClampedArray(newImgData), paintWidth, paintHeight),
+      0,
+      0
       );
-      tmpCtx = tmpCanvas.context;
-      tmpCtx.clearRect(0, 0, newWidth, newHeight);
-      tmpCtx.drawImage(
-        img,
-        0,
-        0,
-        paintWidth,
-        paintHeight,
-        0,
-        0,
-        newWidth,
-        newHeight
-      );
-      img = tmpCanvas.canvas;
-      paintWidth = newWidth;
-      paintHeight = newHeight;
-      tmpCanvasId = tmpCanvasId === "prescale1" ? "prescale2" : "prescale1";
-    }
+    img = tmpCanvas.canvas;
     return {
       img,
       paintWidth,
@@ -2550,7 +2539,7 @@ class CanvasGraphics {
     // - remove background color:
     // colorNew = color - alphaNew *colorBackdrop /(1 - alphaNew)
     if (!group.isolated) {
-      info("TODO: Support non-isolated groups.");
+      console.log("TODO: Support non-isolated groups.");
     }
 
     // TODO knockout - supposedly possible with the clever use of compositing

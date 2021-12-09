@@ -19,7 +19,7 @@
 /** @typedef {import("./display/api").PDFDocumentProxy} PDFDocumentProxy */
 /** @typedef {import("./display/api").PDFPageProxy} PDFPageProxy */
 /** @typedef {import("./display/api").RenderTask} RenderTask */
-
+import "./shared/resize";
 import {
   addLinkAttributes,
   getFilenameFromUrl,
