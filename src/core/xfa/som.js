@@ -15,6 +15,7 @@
 
 import {
   $appendChild,
+  $getChildren,
   $getChildrenByClass,
   $getChildrenByName,
   $getParent,
@@ -23,6 +24,7 @@ import {
   XFAObjectArray,
   XmlObject,
 } from "./xfa_object.js";
+import { NamespaceIds } from "./namespaces.js";
 import { warn } from "../../shared/util.js";
 
 const namePattern = /^[^.[]+/;
@@ -36,7 +38,12 @@ const operators = {
 };
 
 const shortcuts = new Map([
-  ["$data", (root, current) => root.datasets.data],
+  ["$data", (root, current) => (root.datasets ? root.datasets.data : root)],
+  [
+    "$record",
+    (root, current) =>
+      (root.datasets ? root.datasets.data : root)[$getChildren]()[0],
+  ],
   ["$template", (root, current) => root.template],
   ["$connectionSet", (root, current) => root.connectionSet],
   ["$form", (root, current) => root.form],
@@ -51,6 +58,7 @@ const shortcuts = new Map([
 ]);
 
 const somCache = new WeakMap();
+const NS_DATASETS = NamespaceIds.datasets.id;
 
 function parseIndex(index) {
   index = index.trim();
@@ -60,7 +68,10 @@ function parseIndex(index) {
   return parseInt(index, 10) || 0;
 }
 
-function parseExpression(expr, dotDotAllowed) {
+// For now expressions containaing .[...] or .(...) are not
+// evaluated so don't parse them.
+// TODO: implement that stuff and the remove the noExpr param.
+function parseExpression(expr, dotDotAllowed, noExpr = true) {
   let match = expr.match(namePattern);
   if (!match) {
     return null;
@@ -108,10 +119,22 @@ function parseExpression(expr, dotDotAllowed) {
         operator = operators.dotHash;
         break;
       case "[":
+        if (noExpr) {
+          warn(
+            "XFA - SOM expression contains a FormCalc subexpression which is not supported for now."
+          );
+          return null;
+        }
         // TODO: FormCalc expression so need to use the parser
         operator = operators.dotBracket;
         break;
       case "(":
+        if (noExpr) {
+          warn(
+            "XFA - SOM expression contains a JavaScript subexpression which is not supported for now."
+          );
+          return null;
+        }
         // TODO:
         // Javascript expression: should be a boolean operation with a path
         // so maybe we can have our own parser for that stuff or
@@ -246,7 +269,8 @@ function createNodes(root, path) {
   let node = null;
   for (const { name, index } of path) {
     for (let i = 0, ii = !isFinite(index) ? 0 : index; i <= ii; i++) {
-      node = new XmlObject(root[$namespaceId], name);
+      const nsId = root[$namespaceId] === NS_DATASETS ? -1 : root[$namespaceId];
+      node = new XmlObject(nsId, name);
       root[$appendChild](node);
     }
 

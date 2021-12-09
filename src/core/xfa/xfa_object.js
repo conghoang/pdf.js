@@ -14,7 +14,7 @@
  */
 
 import { getInteger, getKeyword, HTMLResult } from "./utils.js";
-import { shadow, warn } from "../../shared/util.js";
+import { shadow, utf8StringToString, warn } from "../../shared/util.js";
 import { encodeToXmlString } from "../core_utils.js";
 import { NamespaceIds } from "./namespaces.js";
 import { searchNode } from "./som.js";
@@ -51,7 +51,6 @@ const $getNextPage = Symbol();
 const $getSubformParent = Symbol();
 const $getParent = Symbol();
 const $getTemplateRoot = Symbol();
-const $global = Symbol();
 const $globalData = Symbol();
 const $hasSettableValue = Symbol();
 const $ids = Symbol();
@@ -61,7 +60,9 @@ const $isCDATAXml = Symbol();
 const $isBindable = Symbol();
 const $isDataValue = Symbol();
 const $isDescendent = Symbol();
+const $isNsAgnostic = Symbol();
 const $isSplittable = Symbol();
+const $isThereMoreWidth = Symbol();
 const $isTransparent = Symbol();
 const $isUsable = Symbol();
 const $lastAttribute = Symbol();
@@ -72,6 +73,8 @@ const $onChild = Symbol();
 const $onChildCheck = Symbol();
 const $onText = Symbol();
 const $pushGlyphs = Symbol();
+const $popPara = Symbol();
+const $pushPara = Symbol();
 const $removeChild = Symbol();
 const $root = Symbol("root");
 const $resolvePrototypes = Symbol();
@@ -79,7 +82,9 @@ const $searchNode = Symbol();
 const $setId = Symbol();
 const $setSetAttributes = Symbol();
 const $setValue = Symbol();
+const $tabIndex = Symbol();
 const $text = Symbol();
+const $toPages = Symbol();
 const $toHTML = Symbol();
 const $toString = Symbol();
 const $toStyle = Symbol();
@@ -159,6 +164,10 @@ class XFAObject {
     );
   }
 
+  [$isNsAgnostic]() {
+    return false;
+  }
+
   [$acceptWhitespace]() {
     return false;
   }
@@ -169,6 +178,16 @@ class XFAObject {
 
   [$isBindable]() {
     return false;
+  }
+
+  [$popPara]() {
+    if (this.para) {
+      this[$getTemplateRoot]()[$extra].paraStack.pop();
+    }
+  }
+
+  [$pushPara]() {
+    this[$getTemplateRoot]()[$extra].paraStack.push(this.para);
   }
 
   [$setId](ids) {
@@ -185,9 +204,22 @@ class XFAObject {
     return false;
   }
 
+  /**
+     Return true if this node (typically a container)
+     can provide more width during layout.
+     The goal is to help to know what a descendant must
+     do in case of horizontal overflow.
+   */
+  [$isThereMoreWidth]() {
+    return false;
+  }
+
   [$appendChild](child) {
     child[_parent] = this;
     this[_children].push(child);
+    if (!child[$globalData] && this[$globalData]) {
+      child[$globalData] = this[$globalData];
+    }
   }
 
   [$removeChild](child) {
@@ -220,6 +252,9 @@ class XFAObject {
   [$insertAt](i, child) {
     child[_parent] = this;
     this[_children].splice(i, 0, child);
+    if (!child[$globalData] && this[$globalData]) {
+      child[$globalData] = this[$globalData];
+    }
   }
 
   /**
@@ -734,6 +769,10 @@ class XFAAttribute {
     return true;
   }
 
+  [$getDataValue]() {
+    return this[$content].trim();
+  }
+
   [$setValue](value) {
     value = value.value || "";
     this[$content] = value.toString();
@@ -780,10 +819,12 @@ class XmlObject extends XFAObject {
       buf.push(encodeToXmlString(this[$content]));
       return;
     }
+    const utf8TagName = utf8StringToString(tagName);
     const prefix = this[$namespaceId] === NS_DATASETS ? "xfa:" : "";
-    buf.push(`<${prefix}${tagName}`);
+    buf.push(`<${prefix}${utf8TagName}`);
     for (const [name, value] of this[_attributes].entries()) {
-      buf.push(` ${name}="${encodeToXmlString(value[$content])}"`);
+      const utf8Name = utf8StringToString(name);
+      buf.push(` ${utf8Name}="${encodeToXmlString(value[$content])}"`);
     }
     if (this[_dataValue] !== null) {
       if (this[_dataValue]) {
@@ -809,7 +850,7 @@ class XmlObject extends XFAObject {
         child[$toString](buf);
       }
     }
-    buf.push(`</${prefix}${tagName}>`);
+    buf.push(`</${prefix}${utf8TagName}>`);
   }
 
   [$onChild](child) {
@@ -938,8 +979,11 @@ class XmlObject extends XFAObject {
     this[$content] = value.toString();
   }
 
-  [$dump]() {
+  [$dump](hasNS = false) {
     const dumped = Object.create(null);
+    if (hasNS) {
+      dumped.$ns = this[$namespaceId];
+    }
     if (this[$content]) {
       dumped.$content = this[$content];
     }
@@ -947,7 +991,7 @@ class XmlObject extends XFAObject {
 
     dumped.children = [];
     for (const child of this[_children]) {
-      dumped.children.push(child[$dump]());
+      dumped.children.push(child[$dump](hasNS));
     }
 
     dumped.attributes = Object.create(null);
@@ -1063,7 +1107,6 @@ export {
   $getRealChildrenByNameIt,
   $getSubformParent,
   $getTemplateRoot,
-  $global,
   $globalData,
   $hasSettableValue,
   $ids,
@@ -1073,7 +1116,9 @@ export {
   $isCDATAXml,
   $isDataValue,
   $isDescendent,
+  $isNsAgnostic,
   $isSplittable,
+  $isThereMoreWidth,
   $isTransparent,
   $isUsable,
   $namespaceId,
@@ -1082,7 +1127,9 @@ export {
   $onChild,
   $onChildCheck,
   $onText,
+  $popPara,
   $pushGlyphs,
+  $pushPara,
   $removeChild,
   $resolvePrototypes,
   $root,
@@ -1090,8 +1137,10 @@ export {
   $setId,
   $setSetAttributes,
   $setValue,
+  $tabIndex,
   $text,
   $toHTML,
+  $toPages,
   $toString,
   $toStyle,
   $uid,

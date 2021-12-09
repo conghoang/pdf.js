@@ -18,11 +18,20 @@ import {
   DefaultAnnotationLayerFactory,
 } from "./annotation_layer_builder.js";
 import {
+  DefaultStructTreeLayerFactory,
+  StructTreeLayerBuilder,
+} from "./struct_tree_layer_builder.js";
+import {
   DefaultTextLayerFactory,
   TextLayerBuilder,
 } from "./text_layer_builder.js";
+import {
+  DefaultXfaLayerFactory,
+  XfaLayerBuilder,
+} from "./xfa_layer_builder.js";
 import { EventBus, ProgressBar } from "./ui_utils.js";
 import { PDFLinkService, SimpleLinkService } from "./pdf_link_service.js";
+import { PDFSinglePageViewer, PDFViewer } from "./pdf_viewer.js";
 import { DownloadManager } from "./download_manager.js";
 import { GenericL10n } from "./genericl10n.js";
 import { NullL10n } from "./l10n_utils.js";
@@ -30,8 +39,6 @@ import { PDFFindController } from "./pdf_find_controller.js";
 import { PDFHistory } from "./pdf_history.js";
 import { PDFPageView } from "./pdf_page_view.js";
 import { PDFScriptingManager } from "./pdf_scripting_manager.js";
-import { PDFSinglePageViewer } from "./pdf_single_page_viewer.js";
-import { PDFViewer } from "./pdf_viewer.js";
 
 // eslint-disable-next-line no-unused-vars
 const pdfjsVersion = PDFJSDev.eval("BUNDLE_VERSION");
@@ -41,7 +48,9 @@ const pdfjsBuild = PDFJSDev.eval("BUNDLE_BUILD");
 export {
   AnnotationLayerBuilder,
   DefaultAnnotationLayerFactory,
+  DefaultStructTreeLayerFactory,
   DefaultTextLayerFactory,
+  DefaultXfaLayerFactory,
   DownloadManager,
   EventBus,
   GenericL10n,
@@ -55,5 +64,7 @@ export {
   PDFViewer,
   ProgressBar,
   SimpleLinkService,
+  StructTreeLayerBuilder,
   TextLayerBuilder,
+  XfaLayerBuilder,
 };

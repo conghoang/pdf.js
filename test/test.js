@@ -24,7 +24,23 @@ var os = require("os");
 var puppeteer = require("puppeteer");
 var url = require("url");
 var testUtils = require("./testutils.js");
+const dns = require("dns");
 const yargs = require("yargs");
+
+// Chrome uses host `127.0.0.1` in the browser's websocket endpoint URL while
+// Firefox uses `localhost`, which before Node.js 17 also resolved to the IPv4
+// address `127.0.0.1` by Node.js' DNS resolver. However, this behavior changed
+// in Node.js 17 where the default is to prefer an IPv6 address if one is
+// offered (which varies based on the OS and/or how the `localhost` hostname
+// resolution is configured), so it can now also resolve to `::1`. This causes
+// Firefox to not start anymore since it doesn't bind on the `::1` interface.
+// To avoid this, we switch Node.js' DNS resolver back to preferring IPv4
+// since we connect to a local browser anyway. Only do this for Node.js versions
+// that actually have this API since it got introduced in Node.js 14.18.0 and
+// it's not relevant for older versions anyway.
+if (dns.setDefaultResultOrder !== undefined) {
+  dns.setDefaultResultOrder("ipv4first");
+}
 
 function parseOptions() {
   yargs
@@ -43,6 +59,11 @@ function parseOptions() {
       alias: "h",
       default: false,
       describe: "Show this help message.",
+      type: "boolean",
+    })
+    .option("integration", {
+      default: false,
+      describe: "Run the integration tests.",
       type: "boolean",
     })
     .option("manifestFile", {
@@ -114,6 +135,11 @@ function parseOptions() {
       describe: "Run the unit tests.",
       type: "boolean",
     })
+    .option("xfaOnly", {
+      default: false,
+      describe: "Only run the XFA reftest(s).",
+      type: "boolean",
+    })
     .check(argv => {
       if (
         +argv.reftest + argv.unitTest + argv.fontTest + argv.masterMode <=
@@ -124,6 +150,23 @@ function parseOptions() {
       throw new Error(
         "--reftest, --unitTest, --fontTest, and --masterMode must not be specified together."
       );
+    })
+    .check(argv => {
+      if (
+        +argv.unitTest + argv.fontTest + argv.integration + argv.xfaOnly <=
+        1
+      ) {
+        return true;
+      }
+      throw new Error(
+        "--unitTest, --fontTest, --integration, and --xfaOnly must not be specified together."
+      );
+    })
+    .check(argv => {
+      if (argv.testfilter && argv.testfilter.length > 0 && argv.xfaOnly) {
+        throw new Error("--testfilter and --xfaOnly cannot be used together.");
+      }
+      return true;
     })
     .check(argv => {
       if (!argv.noDownload || !argv.downloadOnly) {
@@ -262,11 +305,9 @@ function startRefTest(masterMode, showRefImages) {
     } else if (showRefImages && numEqFailures > 0) {
       console.log();
       console.log(
-        "Starting reftest harness to examine " +
-          numEqFailures +
-          " eq test failures."
+        `Starting reftest harness to examine ${numEqFailures} eq test failures.`
       );
-      examineRefImages(numEqFailures);
+      examineRefImages();
     }
   }
 
@@ -363,12 +404,16 @@ function handleSessionTimeout(session) {
 function getTestManifest() {
   var manifest = JSON.parse(fs.readFileSync(options.manifestFile));
 
-  var testFilter = options.testfilter.slice(0);
-  if (testFilter.length) {
+  const testFilter = options.testfilter.slice(0),
+    xfaOnly = options.xfaOnly;
+  if (testFilter.length || xfaOnly) {
     manifest = manifest.filter(function (item) {
       var i = testFilter.indexOf(item.id);
       if (i !== -1) {
         testFilter.splice(i, 1);
+        return true;
+      }
+      if (xfaOnly && item.enableXfa) {
         return true;
       }
       return false;
@@ -734,6 +779,7 @@ function makeTestUrl(startUrl) {
       `?browser=${encodeURIComponent(browserName)}` +
       `&manifestFile=${encodeURIComponent("/test/" + options.manifestFile)}` +
       `&testFilter=${JSON.stringify(options.testfilter)}` +
+      `&xfaOnly=${options.xfaOnly}` +
       `&delay=${options.statsDelay}` +
       `&masterMode=${options.masterMode}`;
     return startUrl + queryParameters;
@@ -891,6 +937,7 @@ async function startBrowser(browserName, startUrl = "") {
       "pdfjs.disabled": true,
       "browser.helperApps.neverAsk.saveToDisk": "application/pdf",
       // Avoid popup when saving is done
+      "browser.download.improvements_to_download_panel": false,
       "browser.download.panel.shown": true,
       // Save file in output
       "browser.download.folderList": 2,
@@ -909,7 +956,7 @@ async function startBrowser(browserName, startUrl = "") {
   if (startUrl) {
     const pages = await browser.pages();
     const page = pages[0];
-    await page.goto(startUrl, { timeout: 0 });
+    await page.goto(startUrl, { timeout: 0, waitUntil: "domcontentloaded" });
   }
 
   return browser;
@@ -944,7 +991,7 @@ function startBrowsers(initSessionCallback, makeStartUrl = null) {
         }
       })
       .catch(function (ex) {
-        console.log(`Error while starting ${browserName}: ${ex}`);
+        console.log(`Error while starting ${browserName}: ${ex.message}`);
         closeSession(browserName);
       });
   }

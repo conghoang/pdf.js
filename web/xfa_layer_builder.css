@@ -13,6 +13,41 @@
  * limitations under the License.
  */
 
+:root {
+  --xfa-unfocused-field-background: url("data:image/svg+xml;charset=UTF-8,<svg width='1px' height='1px' xmlns='http://www.w3.org/2000/svg'><rect width='100%' height='100%' style='fill:rgba(0, 54, 255, 0.13);'/></svg>");
+}
+
+.xfaLayer .highlight {
+  margin: -1px;
+  padding: 1px;
+  background-color: rgba(239, 203, 237, 1);
+  border-radius: 4px;
+}
+
+.xfaLayer .highlight.appended {
+  position: initial;
+}
+
+.xfaLayer .highlight.begin {
+  border-radius: 4px 0 0 4px;
+}
+
+.xfaLayer .highlight.end {
+  border-radius: 0 4px 4px 0;
+}
+
+.xfaLayer .highlight.middle {
+  border-radius: 0;
+}
+
+.xfaLayer .highlight.selected {
+  background-color: rgba(203, 223, 203, 1);
+}
+
+.xfaLayer ::selection {
+  background: rgba(0, 0, 255, 1);
+}
+
 .xfaPage {
   overflow: hidden;
   position: relative;
@@ -31,7 +66,6 @@
   text-align: initial;
   top: 0;
   left: 0;
-  z-index: 200;
   transform-origin: 0 0;
   line-height: 1.2;
 }
@@ -42,18 +76,26 @@
   font-style: inherit;
   font-weight: inherit;
   font-kerning: inherit;
-  letter-spacing: inherit;
+  letter-spacing: -0.01px;
   text-align: inherit;
   text-decoration: inherit;
-  vertical-align: inherit;
   box-sizing: border-box;
-  background: transparent;
+  background-color: transparent;
   padding: 0;
   margin: 0;
   pointer-events: auto;
+  line-height: inherit;
 }
 
 .xfaLayer div {
+  pointer-events: none;
+}
+
+.xfaLayer svg {
+  pointer-events: none;
+}
+
+.xfaLayer svg * {
   pointer-events: none;
 }
 
@@ -76,29 +118,9 @@
   vertical-align: 0;
 }
 
-.xfaDraw {
-  z-index: 100;
-}
-
-.xfaExclgroup {
-  z-index: 200;
-}
-
-.xfaField {
-  z-index: 300;
-}
-
-.xfaRich {
-  z-index: 300;
-}
-
-.xfaSubform {
-  z-index: 200;
-}
-
 .xfaCaption {
   overflow: hidden;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
 }
 
 .xfaCaptionForCheckButton {
@@ -117,8 +139,16 @@
   align-items: center;
 }
 
+.xfaRight {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+}
+
 .xfaLeft > .xfaCaption,
-.xfaLeft > .xfaCaptionForCheckButton {
+.xfaLeft > .xfaCaptionForCheckButton,
+.xfaRight > .xfaCaption,
+.xfaRight > .xfaCaptionForCheckButton {
   max-height: 100%;
 }
 
@@ -128,44 +158,58 @@
   align-items: flex-start;
 }
 
+.xfaBottom {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+}
+
 .xfaTop > .xfaCaption,
-.xfaTop > .xfaCaptionForCheckButton {
+.xfaTop > .xfaCaptionForCheckButton,
+.xfaBottom > .xfaCaption,
+.xfaBottom > .xfaCaptionForCheckButton {
   width: 100%;
 }
 
 .xfaBorder {
-  background: transparent;
+  background-color: transparent;
   position: absolute;
   pointer-events: none;
 }
 
-.xfaWrapper {
-  display: flex;
-  align-items: stretch;
-}
-
 .xfaWrapped {
-  flex: 1 1 auto;
-}
-
-.xfaTextfield,
-.xfaSelect {
-  background-color: rgba(0, 54, 255, 0.13);
+  width: 100%;
+  height: 100%;
 }
 
 .xfaTextfield:focus,
 .xfaSelect:focus {
+  background-image: none;
   background-color: transparent;
-  outline: none;
+  outline: auto;
+  outline-offset: -1px;
+}
+
+.xfaCheckbox:focus,
+.xfaRadio:focus {
+  outline: auto;
 }
 
 .xfaTextfield,
 .xfaSelect {
-  width: 100%;
   height: 100%;
-  flex: 1 1 0;
+  width: 100%;
+  flex: 1 1 auto;
   border: none;
   resize: none;
+  background-image: var(--xfa-unfocused-field-background);
+}
+
+.xfaTop > .xfaTextfield,
+.xfaTop > .xfaSelect,
+.xfaBottom > .xfaTextfield,
+.xfaBottom > .xfaSelect {
+  flex: 0 1 auto;
 }
 
 .xfaButton {
@@ -176,8 +220,12 @@
   text-align: center;
 }
 
-.xfaButton:hover {
-  background: Highlight;
+.xfaLink {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
 }
 
 .xfaCheckbox,
@@ -190,6 +238,8 @@
 
 .xfaRich {
   white-space: pre-wrap;
+  width: 100%;
+  height: 100%;
 }
 
 .xfaImage {
@@ -199,23 +249,12 @@
   height: 100%;
 }
 
-.xfaRich {
-  width: 100%;
-  height: auto;
-}
-
 .xfaLrTb,
 .xfaRlTb,
 .xfaTb {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-}
-
-.xfaLr,
-.xfaRl,
-.xfaTb > div {
-  flex: 1 1 auto;
 }
 
 .xfaLr {
@@ -253,18 +292,10 @@
   align-items: stretch;
 }
 
-.xfaTable > div {
-  flex: 1 1 auto;
-}
-
 .xfaTable .xfaRow {
   display: flex;
   flex-direction: row;
   align-items: stretch;
-}
-
-.xfaTable .xfaRow > div {
-  flex: 1 1 auto;
 }
 
 .xfaTable .xfaRlRow {
@@ -278,6 +309,8 @@
   flex: 1;
 }
 
+.xfaNonInteractive input,
+.xfaNonInteractive textarea,
 .xfaDisabled input,
 .xfaDisabled textarea,
 .xfaReadOnly input,
@@ -288,7 +321,7 @@
 @media print {
   .xfaTextfield,
   .xfaSelect {
-    background-color: transparent;
+    background: transparent;
   }
 
   .xfaSelect {
