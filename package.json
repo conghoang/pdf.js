@@ -71,6 +71,6 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "pica": "^8.0.0"
+    "pica": "^9.0.1"
   }
 }

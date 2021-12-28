@@ -17,7 +17,7 @@ import {
   FONT_IDENTITY_MATRIX,
   IDENTITY_MATRIX,
   ImageKind,
-  info,
+  // info,
   IsLittleEndianCached,
   isNum,
   OPS,
@@ -33,7 +33,7 @@ import {
   TilingPattern,
 } from "./pattern_helper.js";
 import { PixelsPerInch } from "./display_utils.js";
-import { resizeAndUnsharp } from "../shared/resize";
+import { resizeAndUnsharp } from "../shared/resize.js";
 
 // <canvas> contexts store most of the state we need natively.
 // However, PDF needs a bit more state, which we store here.
@@ -1273,21 +1273,20 @@ class CanvasGraphics {
     const width = img.width;
     const height = img.height;
 
-    let widthScale = Math.max(
+    const widthScale = Math.max(
       Math.hypot(inverseTransform[0], inverseTransform[1]),
       1
     );
-    let heightScale = Math.max(
+    const heightScale = Math.max(
       Math.hypot(inverseTransform[2], inverseTransform[3]),
       1
     );
 
-    let paintWidth = Math.round(width / widthScale),
+    const paintWidth = Math.round(width / widthScale),
       paintHeight = Math.round(height / heightScale);
-    let tmpCanvasId = "prescale1";
-    let tmpCanvas, tmpCtx;
+    const tmpCanvasId = "prescale1";
 
-    tmpCanvas = this.cachedCanvases.getCanvas(
+    const tmpCanvas = this.cachedCanvases.getCanvas(
       tmpCanvasId,
       paintWidth,
       paintHeight
@@ -1306,13 +1305,13 @@ class CanvasGraphics {
       alpha: true,
     });
 
-    tmpCtx = tmpCanvas.context;
+    const tmpCtx = tmpCanvas.context;
 
     tmpCtx.putImageData(
       new ImageData(new Uint8ClampedArray(newImgData), paintWidth, paintHeight),
       0,
       0
-      );
+    );
     img = tmpCanvas.canvas;
     return {
       img,
