@@ -353,6 +353,9 @@ describe("Interaction", () => {
     it("must execute WillPrint and DidPrint actions", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
+          if (browserName === "firefox") {
+            pending("Disabled in Firefox, because of bug 1741698.");
+          }
           if (process.platform === "win32" && browserName === "firefox") {
             pending("Disabled in Firefox on Windows, because of bug 1662471.");
           }
@@ -693,14 +696,9 @@ describe("Interaction", () => {
               );
 
               await page.click(`[data-annotation-id='${id}R']`);
+              const selector = ref.replace("\\", "\\\\");
               await page.waitForFunction(
-                (_ref, _current, _propName) =>
-                  getComputedStyle(document.querySelector(_ref))[_propName] !==
-                  _current,
-                {},
-                ref,
-                current,
-                propName
+                `getComputedStyle(document.querySelector("${selector}"))["${propName}"] !== "${current}"`
               );
 
               const color = await page.$eval(
@@ -752,11 +750,7 @@ describe("Interaction", () => {
             await page.keyboard.press("Tab");
 
             await page.waitForFunction(
-              _prev =>
-                getComputedStyle(document.querySelector("#\\31 71R")).value !==
-                _prev,
-              {},
-              prev
+              `getComputedStyle(document.querySelector("#\\\\31 71R")).value !== "${prev}"`
             );
 
             sum += val;
