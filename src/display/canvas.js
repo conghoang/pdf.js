@@ -33,7 +33,7 @@ import {
 } from "./pattern_helper.js";
 import { PixelsPerInch } from "./display_utils.js";
 import { resizeAndUnsharp } from "../shared/resize.js";
-
+import { isNodeJS } from "../shared/is_node.js";
 // <canvas> contexts store most of the state we need natively.
 // However, PDF needs a bit more state, which we store here.
 // Minimal font size that would be used during canvas fillText operations.
@@ -1309,12 +1309,21 @@ class CanvasGraphics {
     });
 
     const tmpCtx = tmpCanvas.context;
-
-    tmpCtx.putImageData(
-      new ImageData(new Uint8ClampedArray(newImgData), paintWidth, paintHeight),
-      0,
-      0
-    );
+    let imageData;
+    if (isNodeJS) {
+      imageData = this.canvasFactory.newImageData(
+        new Uint8ClampedArray(newImgData),
+        paintWidth,
+        paintHeight
+      );
+    } else {
+      imageData = new ImageData(
+        new Uint8ClampedArray(newImgData),
+        paintWidth,
+        paintHeight
+      );
+    }
+    tmpCtx.putImageData(imageData, 0, 0);
     img = tmpCanvas.canvas;
     return {
       img,
