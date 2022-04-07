@@ -20,7 +20,6 @@ import {
   FontType,
   FormatError,
   info,
-  isNum,
   shadow,
   string32,
   warn,
@@ -34,6 +33,12 @@ import {
   recoverGlyphName,
   SEAC_ANALYSIS_ENABLED,
 } from "./fonts_utils.js";
+import {
+  getCharUnicodeCategory,
+  getUnicodeForGlyph,
+  getUnicodeRangeFor,
+  mapSpecialUnicodeValues,
+} from "./unicode.js";
 import { getDingbatsGlyphsUnicode, getGlyphsUnicode } from "./glyphlist.js";
 import {
   getEncoding,
@@ -50,14 +55,10 @@ import {
   getSupplementalGlyphMapForArialBlack,
   getSupplementalGlyphMapForCalibri,
 } from "./standard_fonts.js";
-import {
-  getUnicodeForGlyph,
-  getUnicodeRangeFor,
-  mapSpecialUnicodeValues,
-} from "./unicode.js";
 import { IdentityToUnicodeMap, ToUnicodeMap } from "./to_unicode_map.js";
 import { CFFFont } from "./cff_font.js";
 import { FontRendererFactory } from "./font_renderer.js";
+import { getFontBasicMetrics } from "./metrics.js";
 import { GlyfTable } from "./glyf.js";
 import { IdentityCMap } from "./cmap.js";
 import { OpenTypeFileBuilder } from "./opentype_file_builder.js";
@@ -212,6 +213,11 @@ class Glyph {
     this.operatorListId = operatorListId;
     this.isSpace = isSpace;
     this.isInFont = isInFont;
+
+    const category = getCharUnicodeCategory(unicode);
+    this.isWhitespace = category.isWhitespace;
+    this.isZeroWidthDiacritic = category.isZeroWidthDiacritic;
+    this.isInvisibleFormatMark = category.isInvisibleFormatMark;
   }
 
   matchesForCache(
@@ -1068,6 +1074,21 @@ class Font {
     );
 
     fontName = stdFontMap[fontName] || nonStdFontMap[fontName] || fontName;
+
+    const fontBasicMetricsMap = getFontBasicMetrics();
+    const metrics = fontBasicMetricsMap[fontName];
+    if (metrics) {
+      if (isNaN(this.ascent)) {
+        this.ascent = metrics.ascent / PDF_GLYPH_SPACE_UNITS;
+      }
+      if (isNaN(this.descent)) {
+        this.descent = metrics.descent / PDF_GLYPH_SPACE_UNITS;
+      }
+      if (isNaN(this.capHeight)) {
+        this.capHeight = metrics.capHeight / PDF_GLYPH_SPACE_UNITS;
+      }
+    }
+
     this.bold = fontName.search(/bold/gi) !== -1;
     this.italic =
       fontName.search(/oblique/gi) !== -1 || fontName.search(/italic/gi) !== -1;
@@ -1959,6 +1980,20 @@ class Font {
       locaEntries.sort((a, b) => {
         return a.index - b.index;
       });
+      // Calculate the endOffset of the "first" glyph correctly when there are
+      // *multiple* empty ones at the start of the data (fixes issue14618.pdf).
+      for (i = 0; i < numGlyphs; i++) {
+        const { offset, endOffset } = locaEntries[i];
+        if (offset !== 0 || endOffset !== 0) {
+          break;
+        }
+        const nextOffset = locaEntries[i + 1].offset;
+        if (nextOffset === 0) {
+          continue;
+        }
+        locaEntries[i].endOffset = nextOffset;
+        break;
+      }
 
       const missingGlyphs = Object.create(null);
       let writeOffset = 0;
@@ -3162,7 +3197,9 @@ class Font {
       }
     }
     width = this.widths[widthCode];
-    width = isNum(width) ? width : this.defaultWidth;
+    if (typeof width !== "number") {
+      width = this.defaultWidth;
+    }
     const vmetric = this.vmetrics && this.vmetrics[widthCode];
 
     let unicode = this.toUnicode.get(charcode) || charcode;

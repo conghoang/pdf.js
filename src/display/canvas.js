@@ -19,7 +19,6 @@ import {
   ImageKind,
   // info,
   IsLittleEndianCached,
-  isNum,
   OPS,
   shadow,
   TextRenderingMode,
@@ -192,6 +191,10 @@ function mirrorContextOperations(ctx, destCtx) {
 }
 
 function addContextCurrentTransform(ctx) {
+  if (ctx._transformStack) {
+    // Reset the transform stack.
+    ctx._transformStack = [];
+  }
   // If the context doesn't expose a `mozCurrentTransform`, add a JS based one.
   if (ctx.mozCurrentTransform) {
     return;
@@ -266,6 +269,9 @@ function addContextCurrentTransform(ctx) {
   };
 
   ctx.restore = function ctxRestore() {
+    if (this._transformStack.length === 0) {
+      warn("Tried to restore a ctx when the stack was already empty.");
+    }
     const prev = this._transformStack.pop();
     if (prev) {
       this._transformMatrix = prev;
@@ -1111,6 +1117,7 @@ class CanvasGraphics {
       // the transformation must already be set in canvasCtx._transformMatrix.
       addContextCurrentTransform(canvasCtx);
     }
+    this._cachedScaleForStroking = null;
     this._cachedGetSinglePixelWidth = null;
   }
 
@@ -1160,10 +1167,6 @@ class CanvasGraphics {
     this.viewportScale = viewport.scale;
 
     this.baseTransform = this.ctx.mozCurrentTransform.slice();
-    this._combinedScaleFactor = Math.hypot(
-      this.baseTransform[0],
-      this.baseTransform[2]
-    );
 
     if (this.imageLayer) {
       this.imageLayer.beginLayout();
@@ -1243,7 +1246,7 @@ class CanvasGraphics {
 
   endDrawing() {
     // Finishing all opened operations such as SMask group painting.
-    while (this.stateStack.length || this.current.activeSMask !== null) {
+    while (this.stateStack.length || this.inSMaskMode) {
       this.restore();
     }
 
@@ -1411,6 +1414,9 @@ class CanvasGraphics {
 
   // Graphics state
   setLineWidth(width) {
+    if (width !== this.current.lineWidth) {
+      this._cachedScaleForStroking = null;
+    }
     this.current.lineWidth = width;
     this.ctx.lineWidth = width;
   }
@@ -1495,8 +1501,12 @@ class CanvasGraphics {
     }
   }
 
+  get inSMaskMode() {
+    return !!this.suspendedCtx;
+  }
+
   checkSMaskState() {
-    const inSMaskMode = !!this.suspendedCtx;
+    const inSMaskMode = this.inSMaskMode;
     if (this.current.activeSMask && !inSMaskMode) {
       this.beginSMaskMode();
     } else if (!this.current.activeSMask && inSMaskMode) {
@@ -1515,7 +1525,7 @@ class CanvasGraphics {
    * the right order on the canvas' graphics state stack.
    */
   beginSMaskMode() {
-    if (this.suspendedCtx) {
+    if (this.inSMaskMode) {
       throw new Error("beginSMaskMode called while already in smask mode");
     }
     const drawnWidth = this.ctx.canvas.width;
@@ -1542,7 +1552,7 @@ class CanvasGraphics {
   }
 
   endSMaskMode() {
-    if (!this.suspendedCtx) {
+    if (!this.inSMaskMode) {
       throw new Error("endSMaskMode called while not in smask mode");
     }
     // The soft mask is done, now restore the suspended canvas as the main
@@ -1551,7 +1561,6 @@ class CanvasGraphics {
     copyCtxState(this.ctx, this.suspendedCtx);
     this.ctx = this.suspendedCtx;
 
-    this.current.activeSMask = null;
     this.suspendedCtx = null;
   }
 
@@ -1581,25 +1590,42 @@ class CanvasGraphics {
   }
 
   save() {
-    this.ctx.save();
+    if (this.inSMaskMode) {
+      // SMask mode may be turned on/off causing us to lose graphics state.
+      // Copy the temporary canvas state to the main(suspended) canvas to keep
+      // it in sync.
+      copyCtxState(this.ctx, this.suspendedCtx);
+      // Don't bother calling save on the temporary canvas since state is not
+      // saved there.
+      this.suspendedCtx.save();
+    } else {
+      this.ctx.save();
+    }
     const old = this.current;
     this.stateStack.push(old);
     this.current = old.clone();
   }
 
   restore() {
-    if (this.stateStack.length === 0 && this.current.activeSMask) {
+    if (this.stateStack.length === 0 && this.inSMaskMode) {
       this.endSMaskMode();
     }
-
     if (this.stateStack.length !== 0) {
       this.current = this.stateStack.pop();
-      this.ctx.restore();
+      if (this.inSMaskMode) {
+        // Graphics state is stored on the main(suspended) canvas. Restore its
+        // state then copy it over to the temporary canvas.
+        this.suspendedCtx.restore();
+        copyCtxState(this.suspendedCtx, this.ctx);
+      } else {
+        this.ctx.restore();
+      }
       this.checkSMaskState();
 
       // Ensure that the clipping path is reset (fixes issue6413.pdf).
       this.pendingClip = null;
 
+      this._cachedScaleForStroking = null;
       this._cachedGetSinglePixelWidth = null;
     }
   }
@@ -1607,6 +1633,7 @@ class CanvasGraphics {
   transform(a, b, c, d, e, f) {
     this.ctx.transform(a, b, c, d, e, f);
 
+    this._cachedScaleForStroking = null;
     this._cachedGetSinglePixelWidth = null;
   }
 
@@ -1743,7 +1770,6 @@ class CanvasGraphics {
     ctx.globalAlpha = this.current.strokeAlpha;
     if (this.contentVisible) {
       if (typeof strokeColor === "object" && strokeColor?.getPattern) {
-        const lineWidth = this.getSinglePixelWidth();
         ctx.save();
         ctx.strokeStyle = strokeColor.getPattern(
           ctx,
@@ -1751,25 +1777,10 @@ class CanvasGraphics {
           ctx.mozCurrentTransformInverse,
           PathType.STROKE
         );
-        // Prevent drawing too thin lines by enforcing a minimum line width.
-        ctx.lineWidth = Math.max(lineWidth, this.current.lineWidth);
-        ctx.stroke();
+        this.rescaleAndStroke(/* saveRestore */ false);
         ctx.restore();
       } else {
-        const lineWidth = this.getSinglePixelWidth();
-        if (lineWidth < 0 && -lineWidth >= this.current.lineWidth) {
-          // The current transform will transform a square pixel into a
-          // parallelogram where both heights are lower than 1 and not equal.
-          ctx.save();
-          ctx.resetTransform();
-          ctx.lineWidth = Math.round(this._combinedScaleFactor);
-          ctx.stroke();
-          ctx.restore();
-        } else {
-          // Prevent drawing too thin lines by enforcing a minimum line width.
-          ctx.lineWidth = Math.max(lineWidth, this.current.lineWidth);
-          ctx.stroke();
-        }
+        this.rescaleAndStroke(/* saveRestore */ true);
       }
     }
     if (consumePath) {
@@ -1994,7 +2005,7 @@ class CanvasGraphics {
     this.moveText(0, this.current.leading);
   }
 
-  paintChar(character, x, y, patternTransform, resetLineWidthToOne) {
+  paintChar(character, x, y, patternTransform) {
     const ctx = this.ctx;
     const current = this.current;
     const font = current.font;
@@ -2030,10 +2041,6 @@ class CanvasGraphics {
         fillStrokeMode === TextRenderingMode.STROKE ||
         fillStrokeMode === TextRenderingMode.FILL_STROKE
       ) {
-        if (resetLineWidthToOne) {
-          ctx.resetTransform();
-          ctx.lineWidth = Math.round(this._combinedScaleFactor);
-        }
         ctx.stroke();
       }
       ctx.restore();
@@ -2048,16 +2055,7 @@ class CanvasGraphics {
         fillStrokeMode === TextRenderingMode.STROKE ||
         fillStrokeMode === TextRenderingMode.FILL_STROKE
       ) {
-        if (resetLineWidthToOne) {
-          ctx.save();
-          ctx.moveTo(x, y);
-          ctx.resetTransform();
-          ctx.lineWidth = Math.round(this._combinedScaleFactor);
-          ctx.strokeText(character, 0, 0);
-          ctx.restore();
-        } else {
-          ctx.strokeText(character, x, y);
-        }
+        ctx.strokeText(character, x, y);
       }
     }
 
@@ -2148,7 +2146,6 @@ class CanvasGraphics {
     }
 
     let lineWidth = current.lineWidth;
-    let resetLineWidthToOne = false;
     const scale = current.textMatrixScale;
     if (scale === 0 || lineWidth === 0) {
       const fillStrokeMode =
@@ -2157,9 +2154,7 @@ class CanvasGraphics {
         fillStrokeMode === TextRenderingMode.STROKE ||
         fillStrokeMode === TextRenderingMode.FILL_STROKE
       ) {
-        this._cachedGetSinglePixelWidth = null;
         lineWidth = this.getSinglePixelWidth();
-        resetLineWidthToOne = lineWidth < 0;
       }
     } else {
       lineWidth /= scale;
@@ -2176,7 +2171,7 @@ class CanvasGraphics {
       i;
     for (i = 0; i < glyphsLength; ++i) {
       const glyph = glyphs[i];
-      if (isNum(glyph)) {
+      if (typeof glyph === "number") {
         x += (spacingDir * glyph * fontSize) / 1000;
         continue;
       }
@@ -2227,13 +2222,7 @@ class CanvasGraphics {
           // common case
           ctx.fillText(character, scaledX, scaledY);
         } else {
-          this.paintChar(
-            character,
-            scaledX,
-            scaledY,
-            patternTransform,
-            resetLineWidthToOne
-          );
+          this.paintChar(character, scaledX, scaledY, patternTransform);
           if (accent) {
             const scaledAccentX =
               scaledX + (fontSize * accent.offset.x) / fontSizeScale;
@@ -2243,8 +2232,7 @@ class CanvasGraphics {
               accent.fontChar,
               scaledAccentX,
               scaledAccentY,
-              patternTransform,
-              resetLineWidthToOne
+              patternTransform
             );
           }
         }
@@ -2269,6 +2257,7 @@ class CanvasGraphics {
     }
     ctx.restore();
     this.compose();
+
     return undefined;
   }
 
@@ -2292,6 +2281,7 @@ class CanvasGraphics {
     if (isTextInvisible || fontSize === 0) {
       return;
     }
+    this._cachedScaleForStroking = null;
     this._cachedGetSinglePixelWidth = null;
 
     ctx.save();
@@ -2302,7 +2292,7 @@ class CanvasGraphics {
 
     for (i = 0; i < glyphsLength; ++i) {
       glyph = glyphs[i];
-      if (isNum(glyph)) {
+      if (typeof glyph === "number") {
         spacingLength = (spacingDir * glyph * fontSize) / 1000;
         this.ctx.translate(spacingLength, 0);
         current.x += spacingLength * textHScale;
@@ -2517,9 +2507,8 @@ class CanvasGraphics {
     this.save();
     // If there's an active soft mask we don't want it enabled for the group, so
     // clear it out. The mask and suspended canvas will be restored in endGroup.
-    const suspendedCtx = this.suspendedCtx;
-    if (this.current.activeSMask) {
-      this.suspendedCtx = null;
+    if (this.inSMaskMode) {
+      this.endSMaskMode();
       this.current.activeSMask = null;
     }
 
@@ -2638,10 +2627,7 @@ class CanvasGraphics {
       ["ca", 1],
       ["CA", 1],
     ]);
-    this.groupStack.push({
-      ctx: currentCtx,
-      suspendedCtx,
-    });
+    this.groupStack.push(currentCtx);
     this.groupLevel++;
   }
 
@@ -2651,15 +2637,11 @@ class CanvasGraphics {
     }
     this.groupLevel--;
     const groupCtx = this.ctx;
-    const { ctx, suspendedCtx } = this.groupStack.pop();
+    const ctx = this.groupStack.pop();
     this.ctx = ctx;
     // Turn off image smoothing to avoid sub pixel interpolation which can
     // look kind of blurry for some pdfs.
     this.ctx.imageSmoothingEnabled = false;
-
-    if (suspendedCtx) {
-      this.suspendedCtx = suspendedCtx;
-    }
 
     if (group.smask) {
       this.tempSMask = this.smaskStack.pop();
@@ -3096,46 +3078,112 @@ class CanvasGraphics {
   }
 
   getSinglePixelWidth() {
-    if (this._cachedGetSinglePixelWidth === null) {
-      // If transform is [a b] then a pixel (square) is transformed
-      //                 [c d]
-      // into a parallelogram: its area is the abs value of the determinant.
-      // This parallelogram has 2 heights:
-      //  - Area / |col_1|;
-      //  - Area / |col_2|.
-      // so in order to get a height of at least 1, pixel height
-      // must be computed as followed:
-      //  h = max(sqrt(a² + c²) / |det(M)|, sqrt(b² + d²) / |det(M)|).
-      // This is equivalent to:
-      //  h = max(|line_1_inv(M)|, |line_2_inv(M)|)
+    if (!this._cachedGetSinglePixelWidth) {
       const m = this.ctx.mozCurrentTransform;
-
-      const absDet = Math.abs(m[0] * m[3] - m[2] * m[1]);
-      const sqNorm1 = m[0] ** 2 + m[2] ** 2;
-      const sqNorm2 = m[1] ** 2 + m[3] ** 2;
-      const pixelHeight = Math.sqrt(Math.max(sqNorm1, sqNorm2)) / absDet;
-      if (sqNorm1 !== sqNorm2 && this._combinedScaleFactor * pixelHeight > 1) {
-        // The parallelogram isn't a square and at least one height
-        // is lower than 1 so the resulting line width must be 1
-        // but it cannot be achieved with one scale: when scaling a pixel
-        // we'll get a rectangle (see issue #12295).
-        // For example with matrix [0.001 0, 0, 100], a pixel is transformed
-        // in a rectangle 0.001x100. If we just scale by 1000 (to have a 1)
-        // then we'll get a rectangle 1x1e5 which is wrong.
-        // In this case, we must reset the transform, set linewidth to 1
-        // and then stroke.
-        this._cachedGetSinglePixelWidth = -(
-          this._combinedScaleFactor * pixelHeight
-        );
-      } else if (absDet > Number.EPSILON) {
-        this._cachedGetSinglePixelWidth = pixelHeight;
+      if (m[1] === 0 && m[2] === 0) {
+        // Fast path
+        this._cachedGetSinglePixelWidth =
+          1 / Math.min(Math.abs(m[0]), Math.abs(m[3]));
       } else {
-        // Matrix is non-invertible.
-        this._cachedGetSinglePixelWidth = 1;
+        const absDet = Math.abs(m[0] * m[3] - m[2] * m[1]);
+        const normX = Math.hypot(m[0], m[2]);
+        const normY = Math.hypot(m[1], m[3]);
+        this._cachedGetSinglePixelWidth = Math.max(normX, normY) / absDet;
       }
     }
-
     return this._cachedGetSinglePixelWidth;
+  }
+
+  getScaleForStroking() {
+    // A pixel has thicknessX = thicknessY = 1;
+    // A transformed pixel is a parallelogram and the thicknesses
+    // corresponds to the heights.
+    // The goal of this function is to rescale before setting the
+    // lineWidth in order to have both thicknesses greater or equal
+    // to 1 after transform.
+    if (!this._cachedScaleForStroking) {
+      const { lineWidth } = this.current;
+      const m = this.ctx.mozCurrentTransform;
+      let scaleX, scaleY;
+
+      if (m[1] === 0 && m[2] === 0) {
+        // Fast path
+        const normX = Math.abs(m[0]);
+        const normY = Math.abs(m[3]);
+        if (lineWidth === 0) {
+          scaleX = 1 / normX;
+          scaleY = 1 / normY;
+        } else {
+          const scaledXLineWidth = normX * lineWidth;
+          const scaledYLineWidth = normY * lineWidth;
+          scaleX = scaledXLineWidth < 1 ? 1 / scaledXLineWidth : 1;
+          scaleY = scaledYLineWidth < 1 ? 1 / scaledYLineWidth : 1;
+        }
+      } else {
+        // A pixel (base (x, y)) is transformed by M into a parallelogram:
+        //  - its area is |det(M)|;
+        //  - heightY (orthogonal to Mx) has a length: |det(M)| / norm(Mx);
+        //  - heightX (orthogonal to My) has a length: |det(M)| / norm(My).
+        // heightX and heightY are the thicknesses of the transformed pixel
+        // and they must be both greater or equal to 1.
+        const absDet = Math.abs(m[0] * m[3] - m[2] * m[1]);
+        const normX = Math.hypot(m[0], m[1]);
+        const normY = Math.hypot(m[2], m[3]);
+        if (lineWidth === 0) {
+          scaleX = normY / absDet;
+          scaleY = normX / absDet;
+        } else {
+          const baseArea = lineWidth * absDet;
+          scaleX = normY > baseArea ? normY / baseArea : 1;
+          scaleY = normX > baseArea ? normX / baseArea : 1;
+        }
+      }
+      this._cachedScaleForStroking = [scaleX, scaleY];
+    }
+    return this._cachedScaleForStroking;
+  }
+
+  // Rescale before stroking in order to have a final lineWidth
+  // with both thicknesses greater or equal to 1.
+  rescaleAndStroke(saveRestore) {
+    const { ctx } = this;
+    const { lineWidth } = this.current;
+    const [scaleX, scaleY] = this.getScaleForStroking();
+
+    ctx.lineWidth = lineWidth || 1;
+
+    if (scaleX === 1 && scaleY === 1) {
+      ctx.stroke();
+      return;
+    }
+
+    let savedMatrix, savedDashes, savedDashOffset;
+    if (saveRestore) {
+      savedMatrix = ctx.mozCurrentTransform.slice();
+      savedDashes = ctx.getLineDash().slice();
+      savedDashOffset = ctx.lineDashOffset;
+    }
+
+    ctx.scale(scaleX, scaleY);
+
+    // How the dashed line is rendered depends on the current transform...
+    // so we added a rescale to handle too thin lines and consequently
+    // the way the line is dashed will be modified.
+    // If scaleX === scaleY, the dashed lines will be rendered correctly
+    // else we'll have some bugs (but only with too thin lines).
+    // Here we take the max... why not taking the min... or something else.
+    // Anyway, as said it's buggy when scaleX !== scaleY.
+    const scale = Math.max(scaleX, scaleY);
+    ctx.setLineDash(ctx.getLineDash().map(x => x / scale));
+    ctx.lineDashOffset /= scale;
+
+    ctx.stroke();
+
+    if (saveRestore) {
+      ctx.setTransform(...savedMatrix);
+      ctx.setLineDash(savedDashes);
+      ctx.lineDashOffset = savedDashOffset;
+    }
   }
 
   getCanvasPosition(x, y) {

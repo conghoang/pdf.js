@@ -598,6 +598,21 @@ describe("Scripting", function () {
       });
     });
 
+    describe("AFParseDateEx", function () {
+      it("should parse a date with a format", async () => {
+        const check = async (date, format, expected) => {
+          const value = await myeval(
+            `AFParseDateEx("${date}", "${format}").toISOString()`
+          );
+          expect(value).toEqual(new Date(expected).toISOString());
+        };
+
+        await check("05", "dd", "2000/01/05");
+        await check("12", "mm", "2000/12/01");
+        await check("2022", "yyyy", "2022/01/01");
+      });
+    });
+
     describe("AFExtractNums", function () {
       it("should extract numbers", async () => {
         let value = await myeval(`AFExtractNums("123 456 789")`);
@@ -1168,11 +1183,204 @@ describe("Scripting", function () {
           value: "3F?",
           change: "0",
           name: "Keystroke",
-          willCommit: true,
+          willCommit: false,
           selStart: 3,
           selEnd: 3,
         });
         expect(send_queue.has(refId)).toEqual(false);
+
+        await sandbox.dispatchEventInSandbox({
+          id: refId,
+          value: "3F?0",
+          name: "Keystroke",
+          willCommit: true,
+          selStart: 4,
+          selEnd: 4,
+        });
+        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.get(refId)).toEqual({
+          id: refId,
+          valueAsString: "3F?0",
+        });
+      });
+    });
+
+    describe("AFSpecial_Keystroke", function () {
+      it("should validate a zip code on a keystroke event", async () => {
+        const refId = getId();
+        const data = {
+          objects: {
+            field: [
+              {
+                id: refId,
+                value: "",
+                actions: {
+                  Keystroke: [`AFSpecial_Keystroke(0);`],
+                },
+                type: "text",
+              },
+            ],
+          },
+          appInfo: { language: "en-US", platform: "Linux x86_64" },
+          calculationOrder: [],
+          dispatchEventName: "_dispatchMe",
+        };
+        sandbox.createSandbox(data);
+
+        let value = "";
+        const changes = "12345";
+        let i = 0;
+
+        for (; i < changes.length; i++) {
+          const change = changes.charAt(i);
+          await sandbox.dispatchEventInSandbox({
+            id: refId,
+            value,
+            change,
+            name: "Keystroke",
+            willCommit: false,
+            selStart: i,
+            selEnd: i,
+          });
+          expect(send_queue.has(refId)).toEqual(false);
+          value += change;
+        }
+
+        await sandbox.dispatchEventInSandbox({
+          id: refId,
+          value,
+          change: "A",
+          name: "Keystroke",
+          willCommit: false,
+          selStart: i,
+          selEnd: i,
+        });
+        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.get(refId)).toEqual({
+          id: refId,
+          value,
+          selRange: [i, i],
+        });
+
+        send_queue.delete(refId);
+      });
+
+      it("should validate a US phone number (long) on a keystroke event", async () => {
+        const refId = getId();
+        const data = {
+          objects: {
+            field: [
+              {
+                id: refId,
+                value: "",
+                actions: {
+                  Keystroke: [`AFSpecial_Keystroke(2);`],
+                },
+                type: "text",
+              },
+            ],
+          },
+          appInfo: { language: "en-US", platform: "Linux x86_64" },
+          calculationOrder: [],
+          dispatchEventName: "_dispatchMe",
+        };
+        sandbox.createSandbox(data);
+
+        let value = "";
+        const changes = "(123) 456-7890";
+        let i = 0;
+
+        for (; i < changes.length; i++) {
+          const change = changes.charAt(i);
+          await sandbox.dispatchEventInSandbox({
+            id: refId,
+            value,
+            change,
+            name: "Keystroke",
+            willCommit: false,
+            selStart: i,
+            selEnd: i,
+          });
+          expect(send_queue.has(refId)).toEqual(false);
+          value += change;
+        }
+
+        await sandbox.dispatchEventInSandbox({
+          id: refId,
+          value,
+          change: "A",
+          name: "Keystroke",
+          willCommit: false,
+          selStart: i,
+          selEnd: i,
+        });
+        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.get(refId)).toEqual({
+          id: refId,
+          value,
+          selRange: [i, i],
+        });
+
+        send_queue.delete(refId);
+      });
+
+      it("should validate a US phone number (short) on a keystroke event", async () => {
+        const refId = getId();
+        const data = {
+          objects: {
+            field: [
+              {
+                id: refId,
+                value: "",
+                actions: {
+                  Keystroke: [`AFSpecial_Keystroke(2);`],
+                },
+                type: "text",
+              },
+            ],
+          },
+          appInfo: { language: "en-US", platform: "Linux x86_64" },
+          calculationOrder: [],
+          dispatchEventName: "_dispatchMe",
+        };
+        sandbox.createSandbox(data);
+
+        let value = "";
+        const changes = "123-4567";
+        let i = 0;
+
+        for (; i < changes.length; i++) {
+          const change = changes.charAt(i);
+          await sandbox.dispatchEventInSandbox({
+            id: refId,
+            value,
+            change,
+            name: "Keystroke",
+            willCommit: false,
+            selStart: i,
+            selEnd: i,
+          });
+          expect(send_queue.has(refId)).toEqual(false);
+          value += change;
+        }
+
+        await sandbox.dispatchEventInSandbox({
+          id: refId,
+          value,
+          change: "A",
+          name: "Keystroke",
+          willCommit: false,
+          selStart: i,
+          selEnd: i,
+        });
+        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.get(refId)).toEqual({
+          id: refId,
+          value,
+          selRange: [i, i],
+        });
+
+        send_queue.delete(refId);
       });
     });
 

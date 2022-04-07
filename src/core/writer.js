@@ -14,9 +14,10 @@
  */
 
 import { bytesToString, escapeString, warn } from "../shared/util.js";
-import { Dict, isDict, isName, isRef, isStream, Name } from "./primitives.js";
+import { Dict, Name, Ref } from "./primitives.js";
 import { escapePDFName, parseXFAPath } from "./core_utils.js";
 import { SimpleDOMNode, SimpleXMLParser } from "./xml_parser.js";
+import { BaseStream } from "./base_stream.js";
 import { calculateMD5 } from "./crypto.js";
 
 function writeDict(dict, buffer, transform) {
@@ -70,9 +71,9 @@ function numberToString(value) {
 }
 
 function writeValue(value, buffer, transform) {
-  if (isName(value)) {
+  if (value instanceof Name) {
     buffer.push(`/${escapePDFName(value.name)}`);
-  } else if (isRef(value)) {
+  } else if (value instanceof Ref) {
     buffer.push(`${value.num} ${value.gen} R`);
   } else if (Array.isArray(value)) {
     writeArray(value, buffer, transform);
@@ -85,9 +86,9 @@ function writeValue(value, buffer, transform) {
     buffer.push(numberToString(value));
   } else if (typeof value === "boolean") {
     buffer.push(value.toString());
-  } else if (isDict(value)) {
+  } else if (value instanceof Dict) {
     writeDict(value, buffer, transform);
-  } else if (isStream(value)) {
+  } else if (value instanceof BaseStream) {
     writeStream(value, buffer, transform);
   } else if (value === null) {
     buffer.push("null");
@@ -142,7 +143,11 @@ function writeXFADataForAcroform(str, newRefs) {
     }
     const node = xml.documentElement.searchNode(parseXFAPath(path), 0);
     if (node) {
-      node.childNodes = [new SimpleDOMNode("#text", value)];
+      if (Array.isArray(value)) {
+        node.childNodes = value.map(val => new SimpleDOMNode("value", val));
+      } else {
+        node.childNodes = [new SimpleDOMNode("#text", value)];
+      }
     } else {
       warn(`Node not found for path: ${path}`);
     }

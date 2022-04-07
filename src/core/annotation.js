@@ -24,7 +24,6 @@ import {
   escapeString,
   getModificationDate,
   isAscii,
-  isString,
   OPS,
   RenderingIntentFlag,
   shadow,
@@ -39,15 +38,8 @@ import {
   createDefaultAppearance,
   parseDefaultAppearance,
 } from "./default_appearance.js";
-import {
-  Dict,
-  isDict,
-  isName,
-  isRef,
-  isStream,
-  Name,
-  RefSet,
-} from "./primitives.js";
+import { Dict, isName, Name, Ref, RefSet } from "./primitives.js";
+import { BaseStream } from "./base_stream.js";
 import { bidi } from "./bidi.js";
 import { Catalog } from "./catalog.js";
 import { ColorSpace } from "./colorspace.js";
@@ -57,6 +49,11 @@ import { OperatorList } from "./operator_list.js";
 import { StringStream } from "./stream.js";
 import { writeDict } from "./writer.js";
 import { XFAFactory } from "./xfa/factory.js";
+
+// Represent the percentage of the height of a single-line field over
+// the font size.
+// Acrobat seems to use this value.
+const LINE_FACTOR = 1.35;
 
 class AnnotationFactory {
   /**
@@ -75,14 +72,16 @@ class AnnotationFactory {
   static create(xref, ref, pdfManager, idFactory, collectFields) {
     return Promise.all([
       pdfManager.ensureCatalog("acroForm"),
+      pdfManager.ensureDoc("xfaDatasets"),
       collectFields ? this._getPageIndex(xref, ref, pdfManager) : -1,
-    ]).then(([acroForm, pageIndex]) =>
+    ]).then(([acroForm, xfaDatasets, pageIndex]) =>
       pdfManager.ensure(this, "_create", [
         xref,
         ref,
         pdfManager,
         idFactory,
         acroForm,
+        xfaDatasets,
         collectFields,
         pageIndex,
       ])
@@ -98,19 +97,21 @@ class AnnotationFactory {
     pdfManager,
     idFactory,
     acroForm,
+    xfaDatasets,
     collectFields,
     pageIndex = -1
   ) {
     const dict = xref.fetchIfRef(ref);
-    if (!isDict(dict)) {
+    if (!(dict instanceof Dict)) {
       return undefined;
     }
 
-    const id = isRef(ref) ? ref.toString() : `annot_${idFactory.createObjId()}`;
+    const id =
+      ref instanceof Ref ? ref.toString() : `annot_${idFactory.createObjId()}`;
 
     // Determine the annotation's subtype.
     let subtype = dict.get("Subtype");
-    subtype = isName(subtype) ? subtype.name : null;
+    subtype = subtype instanceof Name ? subtype.name : null;
 
     // Return the right annotation object based on the subtype and field type.
     const parameters = {
@@ -121,6 +122,7 @@ class AnnotationFactory {
       id,
       pdfManager,
       acroForm: acroForm instanceof Dict ? acroForm : Dict.empty,
+      xfaDatasets,
       collectFields,
       pageIndex,
     };
@@ -134,7 +136,7 @@ class AnnotationFactory {
 
       case "Widget":
         let fieldType = getInheritableProperty({ dict, key: "FT" });
-        fieldType = isName(fieldType) ? fieldType.name : null;
+        fieldType = fieldType instanceof Name ? fieldType.name : null;
 
         switch (fieldType) {
           case "Tx":
@@ -215,11 +217,11 @@ class AnnotationFactory {
   static async _getPageIndex(xref, ref, pdfManager) {
     try {
       const annotDict = await xref.fetchIfRefAsync(ref);
-      if (!isDict(annotDict)) {
+      if (!(annotDict instanceof Dict)) {
         return -1;
       }
       const pageRef = annotDict.getRaw("P");
-      if (!isRef(pageRef)) {
+      if (!(pageRef instanceof Ref)) {
         return -1;
       }
       const pageIndex = await pdfManager.ensureCatalog("getPageIndex", [
@@ -398,7 +400,7 @@ class Annotation {
       if (Array.isArray(kids)) {
         const kidIds = [];
         for (const kid of kids) {
-          if (isRef(kid)) {
+          if (kid instanceof Ref) {
             kidIds.push(kid.toString());
           }
         }
@@ -548,9 +550,8 @@ class Annotation {
    *                                    annotation was last modified
    */
   setModificationDate(modificationDate) {
-    this.modificationDate = isString(modificationDate)
-      ? modificationDate
-      : null;
+    this.modificationDate =
+      typeof modificationDate === "string" ? modificationDate : null;
   }
 
   /**
@@ -642,7 +643,7 @@ class Annotation {
     }
 
     this.borderStyle = new AnnotationBorderStyle();
-    if (!isDict(borderStyle)) {
+    if (!(borderStyle instanceof Dict)) {
       return;
     }
     if (borderStyle.has("BS")) {
@@ -687,24 +688,24 @@ class Annotation {
     this.appearance = null;
 
     const appearanceStates = dict.get("AP");
-    if (!isDict(appearanceStates)) {
+    if (!(appearanceStates instanceof Dict)) {
       return;
     }
 
     // In case the normal appearance is a stream, then it is used directly.
     const normalAppearanceState = appearanceStates.get("N");
-    if (isStream(normalAppearanceState)) {
+    if (normalAppearanceState instanceof BaseStream) {
       this.appearance = normalAppearanceState;
       return;
     }
-    if (!isDict(normalAppearanceState)) {
+    if (!(normalAppearanceState instanceof Dict)) {
       return;
     }
 
     // In case the normal appearance is a dictionary, the `AS` entry provides
     // the key of the stream in this dictionary.
     const as = dict.get("AS");
-    if (!isName(as) || !normalAppearanceState.has(as.name)) {
+    if (!(as instanceof Name) || !normalAppearanceState.has(as.name)) {
       return;
     }
     this.appearance = normalAppearanceState.get(as.name);
@@ -918,11 +919,11 @@ class AnnotationBorderStyle {
 
     // Some corrupt PDF generators may provide the width as a `Name`,
     // rather than as a number (fixes issue 10385).
-    if (isName(width)) {
+    if (width instanceof Name) {
       this.width = 0; // This is consistent with the behaviour in Adobe Reader.
       return;
     }
-    if (Number.isInteger(width)) {
+    if (typeof width === "number") {
       if (width > 0) {
         const maxWidth = (rect[2] - rect[0]) / 2;
         const maxHeight = (rect[3] - rect[1]) / 2;
@@ -952,7 +953,7 @@ class AnnotationBorderStyle {
    * @see {@link shared/util.js}
    */
   setStyle(style) {
-    if (!isName(style)) {
+    if (!(style instanceof Name)) {
       return;
     }
     switch (style.name) {
@@ -1058,10 +1059,11 @@ class MarkupAnnotation extends Annotation {
 
     if (dict.has("IRT")) {
       const rawIRT = dict.getRaw("IRT");
-      this.data.inReplyTo = isRef(rawIRT) ? rawIRT.toString() : null;
+      this.data.inReplyTo = rawIRT instanceof Ref ? rawIRT.toString() : null;
 
       const rt = dict.get("RT");
-      this.data.replyType = isName(rt) ? rt.name : AnnotationReplyType.REPLY;
+      this.data.replyType =
+        rt instanceof Name ? rt.name : AnnotationReplyType.REPLY;
     }
 
     if (this.data.replyType === AnnotationReplyType.GROUP) {
@@ -1126,7 +1128,7 @@ class MarkupAnnotation extends Annotation {
    *                                annotation was originally created
    */
   setCreationDate(creationDate) {
-    this.creationDate = isString(creationDate) ? creationDate : null;
+    this.creationDate = typeof creationDate === "string" ? creationDate : null;
   }
 
   _setDefaultAppearance({
@@ -1239,7 +1241,7 @@ class WidgetAnnotation extends Annotation {
       );
     }
 
-    const fieldValue = getInheritableProperty({
+    let fieldValue = getInheritableProperty({
       dict,
       key: "V",
       getArray: true,
@@ -1253,6 +1255,15 @@ class WidgetAnnotation extends Annotation {
     });
     data.defaultFieldValue = this._decodeFormValue(defaultFieldValue);
 
+    if (fieldValue === undefined && params.xfaDatasets) {
+      // Try to figure out if we have something in the xfa dataset.
+      const path = this._title.str;
+      if (path) {
+        this._hasValueFromXFA = true;
+        data.fieldValue = fieldValue = params.xfaDatasets.getValue(path);
+      }
+    }
+
     // When no "V" entry exists, let the fieldValue fallback to the "DV" entry
     // (fixes issue13823.pdf).
     if (fieldValue === undefined && data.defaultFieldValue !== null) {
@@ -1263,15 +1274,14 @@ class WidgetAnnotation extends Annotation {
 
     const defaultAppearance =
       getInheritableProperty({ dict, key: "DA" }) || params.acroForm.get("DA");
-    this._defaultAppearance = isString(defaultAppearance)
-      ? defaultAppearance
-      : "";
+    this._defaultAppearance =
+      typeof defaultAppearance === "string" ? defaultAppearance : "";
     data.defaultAppearanceData = parseDefaultAppearance(
       this._defaultAppearance
     );
 
     const fieldType = getInheritableProperty({ dict, key: "FT" });
-    data.fieldType = isName(fieldType) ? fieldType.name : null;
+    data.fieldType = fieldType instanceof Name ? fieldType.name : null;
 
     const localResources = getInheritableProperty({ dict, key: "DR" });
     const acroFormResources = params.acroForm.get("DR");
@@ -1310,11 +1320,11 @@ class WidgetAnnotation extends Annotation {
   _decodeFormValue(formValue) {
     if (Array.isArray(formValue)) {
       return formValue
-        .filter(item => isString(item))
+        .filter(item => typeof item === "string")
         .map(item => stringToPDFString(item));
-    } else if (isName(formValue)) {
+    } else if (formValue instanceof Name) {
       return stringToPDFString(formValue.name);
-    } else if (isString(formValue)) {
+    } else if (typeof formValue === "string") {
       return stringToPDFString(formValue);
     }
     return null;
@@ -1404,12 +1414,25 @@ class WidgetAnnotation extends Annotation {
   }
 
   async save(evaluator, task, annotationStorage) {
-    if (!annotationStorage) {
-      return null;
-    }
-    const storageEntry = annotationStorage.get(this.data.id);
-    const value = storageEntry && storageEntry.value;
+    const storageEntry = annotationStorage
+      ? annotationStorage.get(this.data.id)
+      : undefined;
+    let value = storageEntry && storageEntry.value;
     if (value === this.data.fieldValue || value === undefined) {
+      if (!this._hasValueFromXFA) {
+        return null;
+      }
+      value = value || this.data.fieldValue;
+    }
+
+    // Value can be an array (with choice list and multiple selections)
+    if (
+      !this._hasValueFromXFA &&
+      Array.isArray(value) &&
+      Array.isArray(this.data.fieldValue) &&
+      value.length === this.data.fieldValue.length &&
+      value.every((x, i) => x === this.data.fieldValue[i])
+    ) {
       return null;
     }
 
@@ -1424,7 +1447,7 @@ class WidgetAnnotation extends Annotation {
     const { xref } = evaluator;
 
     const dict = xref.fetchIfRef(this.ref);
-    if (!isDict(dict)) {
+    if (!(dict instanceof Dict)) {
       return null;
     }
 
@@ -1456,7 +1479,8 @@ class WidgetAnnotation extends Annotation {
       appearance = newTransform.encryptString(appearance);
     }
 
-    dict.set("V", isAscii(value) ? value : stringToUTF16BEString(value));
+    const encoder = val => (isAscii(val) ? val : stringToUTF16BEString(val));
+    dict.set("V", Array.isArray(value) ? value.map(encoder) : encoder(value));
     dict.set("AP", AP);
     dict.set("M", `D:${getModificationDate()}`);
 
@@ -1485,14 +1509,23 @@ class WidgetAnnotation extends Annotation {
 
   async _getAppearance(evaluator, task, annotationStorage) {
     const isPassword = this.hasFieldFlag(AnnotationFieldFlag.PASSWORD);
-    if (!annotationStorage || isPassword) {
+    if (isPassword) {
       return null;
     }
-    const storageEntry = annotationStorage.get(this.data.id);
+    const storageEntry = annotationStorage
+      ? annotationStorage.get(this.data.id)
+      : undefined;
     let value = storageEntry && storageEntry.value;
     if (value === undefined) {
-      // The annotation hasn't been rendered so use the appearance
-      return null;
+      if (!this._hasValueFromXFA || this.appearance) {
+        // The annotation hasn't been rendered so use the appearance.
+        return null;
+      }
+      // The annotation has its value in XFA datasets but not in the V field.
+      value = this.data.fieldValue;
+      if (!value) {
+        return "";
+      }
     }
 
     value = value.trim();
@@ -1523,12 +1556,14 @@ class WidgetAnnotation extends Annotation {
       );
     }
 
+    const font = await this._getFontData(evaluator, task);
     const [defaultAppearance, fontSize] = this._computeFontSize(
-      totalHeight,
+      totalHeight - defaultPadding,
+      totalWidth - 2 * hPadding,
+      value,
+      font,
       lineCount
     );
-
-    const font = await this._getFontData(evaluator, task);
 
     let descent = font.descent;
     if (isNaN(descent)) {
@@ -1618,34 +1653,79 @@ class WidgetAnnotation extends Annotation {
     return initialState.font;
   }
 
-  _computeFontSize(height, lineCount) {
+  _getTextWidth(text, font) {
+    return (
+      font
+        .charsToGlyphs(text)
+        .reduce((width, glyph) => width + glyph.width, 0) / 1000
+    );
+  }
+
+  _computeFontSize(height, width, text, font, lineCount) {
     let { fontSize } = this.data.defaultAppearanceData;
     if (!fontSize) {
       // A zero value for size means that the font shall be auto-sized:
       // its size shall be computed as a function of the height of the
       // annotation rectangle (see 12.7.3.3).
 
-      const roundWithOneDigit = x => Math.round(x * 10) / 10;
+      const roundWithTwoDigits = x => Math.floor(x * 100) / 100;
 
-      // Represent the percentage of the font size over the height
-      // of a single-line field.
-      const FONT_FACTOR = 0.8;
       if (lineCount === -1) {
-        fontSize = roundWithOneDigit(FONT_FACTOR * height);
+        const textWidth = this._getTextWidth(text, font);
+        fontSize = roundWithTwoDigits(
+          Math.min(height / LINE_FACTOR, width / textWidth)
+        );
       } else {
+        const lines = text.split(/\r\n?|\n/);
+        const cachedLines = [];
+        for (const line of lines) {
+          const encoded = font.encodeString(line).join("");
+          const glyphs = font.charsToGlyphs(encoded);
+          const positions = font.getCharPositions(encoded);
+          cachedLines.push({
+            line: encoded,
+            glyphs,
+            positions,
+          });
+        }
+
+        const isTooBig = fsize => {
+          // Return true when the text doesn't fit the given height.
+          let totalHeight = 0;
+          for (const cache of cachedLines) {
+            const chunks = this._splitLine(null, font, fsize, width, cache);
+            totalHeight += chunks.length * fsize;
+            if (totalHeight > height) {
+              return true;
+            }
+          }
+          return false;
+        };
+
         // Hard to guess how many lines there are.
         // The field may have been sized to have 10 lines
         // and the user entered only 1 so if we get font size from
         // height and number of lines then we'll get something too big.
         // So we compute a fake number of lines based on height and
-        // a font size equal to 10.
+        // a font size equal to 12 (this is the default font size in
+        // Acrobat).
         // Then we'll adjust font size to what we have really.
-        fontSize = 10;
-        let lineHeight = fontSize / FONT_FACTOR;
+        fontSize = 12;
+        let lineHeight = fontSize * LINE_FACTOR;
         let numberOfLines = Math.round(height / lineHeight);
         numberOfLines = Math.max(numberOfLines, lineCount);
-        lineHeight = height / numberOfLines;
-        fontSize = roundWithOneDigit(FONT_FACTOR * lineHeight);
+
+        while (true) {
+          lineHeight = height / numberOfLines;
+          fontSize = roundWithTwoDigits(lineHeight / LINE_FACTOR);
+
+          if (isTooBig(fontSize)) {
+            numberOfLines++;
+            continue;
+          }
+
+          break;
+        }
       }
 
       const { fontName, fontColor } = this.data.defaultAppearanceData;
@@ -1659,20 +1739,14 @@ class WidgetAnnotation extends Annotation {
   }
 
   _renderText(text, font, fontSize, totalWidth, alignment, hPadding, vPadding) {
-    // We need to get the width of the text in order to align it correctly
-    const glyphs = font.charsToGlyphs(text);
-    const scale = fontSize / 1000;
-    let width = 0;
-    for (const glyph of glyphs) {
-      width += glyph.width * scale;
-    }
-
     let shift;
     if (alignment === 1) {
       // Center
+      const width = this._getTextWidth(text, font) * fontSize;
       shift = (totalWidth - width) / 2;
     } else if (alignment === 2) {
       // Right
+      const width = this._getTextWidth(text, font) * fontSize;
       shift = totalWidth - width - hPadding;
     } else {
       shift = hPadding;
@@ -1747,7 +1821,7 @@ class TextWidgetAnnotation extends WidgetAnnotation {
     const dict = params.dict;
 
     // The field value is always a string.
-    if (!isString(this.data.fieldValue)) {
+    if (typeof this.data.fieldValue !== "string") {
       this.data.fieldValue = "";
     }
 
@@ -1803,7 +1877,7 @@ class TextWidgetAnnotation extends WidgetAnnotation {
     hPadding,
     vPadding
   ) {
-    const lines = text.split(/\r\n|\r|\n/);
+    const lines = text.split(/\r\n?|\n/);
     const buf = [];
     const totalWidth = width - 2 * hPadding;
     for (const line of lines) {
@@ -1833,18 +1907,18 @@ class TextWidgetAnnotation extends WidgetAnnotation {
     );
   }
 
-  _splitLine(line, font, fontSize, width) {
+  _splitLine(line, font, fontSize, width, cache = {}) {
     // TODO: need to handle chars which are not in the font.
-    line = font.encodeString(line).join("");
+    line = cache.line || font.encodeString(line).join("");
 
-    const glyphs = font.charsToGlyphs(line);
+    const glyphs = cache.glyphs || font.charsToGlyphs(line);
 
     if (glyphs.length <= 1) {
       // Nothing to split
       return [line];
     }
 
-    const positions = font.getCharPositions(line);
+    const positions = cache.positions || font.getCharPositions(line);
     const scale = fontSize / 1000;
     const chunks = [];
 
@@ -2045,7 +2119,7 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     }
 
     const dict = evaluator.xref.fetchIfRef(this.ref);
-    if (!isDict(dict)) {
+    if (!(dict instanceof Dict)) {
       return null;
     }
 
@@ -2091,7 +2165,7 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     }
 
     const dict = evaluator.xref.fetchIfRef(this.ref);
-    if (!isDict(dict)) {
+    if (!(dict instanceof Dict)) {
       return null;
     }
 
@@ -2105,7 +2179,7 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     const encrypt = evaluator.xref.encrypt;
 
     if (value) {
-      if (isRef(this.parent)) {
+      if (this.parent instanceof Ref) {
         const parent = evaluator.xref.fetch(this.parent);
         let parentTransform = null;
         if (encrypt) {
@@ -2118,7 +2192,7 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
         parentBuffer = [`${this.parent.num} ${this.parent.gen} obj\n`];
         writeDict(parent, parentBuffer, parentTransform);
         parentBuffer.push("\nendobj\n");
-      } else if (isDict(this.parent)) {
+      } else if (this.parent instanceof Dict) {
         this.parent.set("V", name);
       }
     }
@@ -2210,12 +2284,12 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
 
   _processCheckBox(params) {
     const customAppearance = params.dict.get("AP");
-    if (!isDict(customAppearance)) {
+    if (!(customAppearance instanceof Dict)) {
       return;
     }
 
     const normalAppearance = customAppearance.get("N");
-    if (!isDict(normalAppearance)) {
+    if (!(normalAppearance instanceof Dict)) {
       return;
     }
 
@@ -2278,21 +2352,21 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     // The parent field's `V` entry holds a `Name` object with the appearance
     // state of whichever child field is currently in the "on" state.
     const fieldParent = params.dict.get("Parent");
-    if (isDict(fieldParent)) {
+    if (fieldParent instanceof Dict) {
       this.parent = params.dict.getRaw("Parent");
       const fieldParentValue = fieldParent.get("V");
-      if (isName(fieldParentValue)) {
+      if (fieldParentValue instanceof Name) {
         this.data.fieldValue = this._decodeFormValue(fieldParentValue);
       }
     }
 
     // The button's value corresponds to its appearance state.
     const appearanceStates = params.dict.get("AP");
-    if (!isDict(appearanceStates)) {
+    if (!(appearanceStates instanceof Dict)) {
       return;
     }
     const normalAppearance = appearanceStates.get("N");
-    if (!isDict(normalAppearance)) {
+    if (!(normalAppearance instanceof Dict)) {
       return;
     }
     for (const key of normalAppearance.getKeys()) {
@@ -2411,7 +2485,7 @@ class ChoiceWidgetAnnotation extends WidgetAnnotation {
     // item is selected or an array of strings if multiple items are selected.
     // For consistency in the API and convenience in the display layer, we
     // always make the field value an array with zero, one or multiple items.
-    if (isString(this.data.fieldValue)) {
+    if (typeof this.data.fieldValue === "string") {
       this.data.fieldValue = [this.data.fieldValue];
     } else if (!this.data.fieldValue) {
       this.data.fieldValue = [];
@@ -2444,6 +2518,135 @@ class ChoiceWidgetAnnotation extends WidgetAnnotation {
       fillColor: this.data.backgroundColor,
       type,
     };
+  }
+
+  async _getAppearance(evaluator, task, annotationStorage) {
+    if (this.data.combo) {
+      return super._getAppearance(evaluator, task, annotationStorage);
+    }
+
+    if (!annotationStorage) {
+      return null;
+    }
+    const storageEntry = annotationStorage.get(this.data.id);
+    let exportedValue = storageEntry && storageEntry.value;
+    if (exportedValue === undefined) {
+      // The annotation hasn't been rendered so use the appearance
+      return null;
+    }
+
+    if (!Array.isArray(exportedValue)) {
+      exportedValue = [exportedValue];
+    }
+
+    const defaultPadding = 2;
+    const hPadding = defaultPadding;
+    const totalHeight = this.data.rect[3] - this.data.rect[1];
+    const totalWidth = this.data.rect[2] - this.data.rect[0];
+    const lineCount = this.data.options.length;
+    const valueIndices = [];
+    for (let i = 0; i < lineCount; i++) {
+      const { exportValue } = this.data.options[i];
+      if (exportedValue.includes(exportValue)) {
+        valueIndices.push(i);
+      }
+    }
+
+    if (!this._defaultAppearance) {
+      // The DA is required and must be a string.
+      // If there is no font named Helvetica in the resource dictionary,
+      // the evaluator will fall back to a default font.
+      // Doing so prevents exceptions and allows saving/printing
+      // the file as expected.
+      this.data.defaultAppearanceData = parseDefaultAppearance(
+        (this._defaultAppearance = "/Helvetica 0 Tf 0 g")
+      );
+    }
+
+    const font = await this._getFontData(evaluator, task);
+
+    let defaultAppearance;
+    let { fontSize } = this.data.defaultAppearanceData;
+    if (!fontSize) {
+      const lineHeight = (totalHeight - defaultPadding) / lineCount;
+      let lineWidth = -1;
+      let value;
+      for (const { displayValue } of this.data.options) {
+        const width = this._getTextWidth(displayValue);
+        if (width > lineWidth) {
+          lineWidth = width;
+          value = displayValue;
+        }
+      }
+
+      [defaultAppearance, fontSize] = this._computeFontSize(
+        lineHeight,
+        totalWidth - 2 * hPadding,
+        value,
+        font,
+        -1
+      );
+    } else {
+      defaultAppearance = this._defaultAppearance;
+    }
+
+    const lineHeight = fontSize * LINE_FACTOR;
+    const vPadding = (lineHeight - fontSize) / 2;
+    const numberOfVisibleLines = Math.floor(totalHeight / lineHeight);
+
+    let firstIndex;
+    if (valueIndices.length === 1) {
+      const valuePosition = valueIndices[0];
+      const indexInPage = valuePosition % numberOfVisibleLines;
+      firstIndex = valuePosition - indexInPage;
+    } else {
+      // If nothing is selected (valueIndice.length === 0), we render
+      // from the first element.
+      firstIndex = valueIndices.length ? valueIndices[0] : 0;
+    }
+    const end = Math.min(firstIndex + numberOfVisibleLines + 1, lineCount);
+
+    const buf = ["/Tx BMC q", `1 1 ${totalWidth} ${totalHeight} re W n`];
+
+    if (valueIndices.length) {
+      // This value has been copied/pasted from annotation-choice-widget.pdf.
+      // It corresponds to rgb(153, 193, 218).
+      buf.push("0.600006 0.756866 0.854904 rg");
+
+      // Highlight the lines in filling a blue rectangle at the selected
+      // positions.
+      for (const index of valueIndices) {
+        if (firstIndex <= index && index < end) {
+          buf.push(
+            `1 ${
+              totalHeight - (index - firstIndex + 1) * lineHeight
+            } ${totalWidth} ${lineHeight} re f`
+          );
+        }
+      }
+    }
+    buf.push("BT", defaultAppearance, `1 0 0 1 0 ${totalHeight} Tm`);
+
+    for (let i = firstIndex; i < end; i++) {
+      const { displayValue } = this.data.options[i];
+      const hpadding = i === firstIndex ? hPadding : 0;
+      const vpadding = i === firstIndex ? vPadding : 0;
+      buf.push(
+        this._renderText(
+          displayValue,
+          font,
+          fontSize,
+          totalWidth,
+          0,
+          hpadding,
+          -lineHeight + vpadding
+        )
+      );
+    }
+
+    buf.push("ET Q EMC");
+
+    return buf.join("\n");
   }
 }
 
@@ -2526,9 +2729,10 @@ class PopupAnnotation extends Annotation {
     }
 
     const parentSubtype = parentItem.get("Subtype");
-    this.data.parentType = isName(parentSubtype) ? parentSubtype.name : null;
+    this.data.parentType =
+      parentSubtype instanceof Name ? parentSubtype.name : null;
     const rawParent = parameters.dict.getRaw("Parent");
-    this.data.parentId = isRef(rawParent) ? rawParent.toString() : null;
+    this.data.parentId = rawParent instanceof Ref ? rawParent.toString() : null;
 
     const parentRect = parentItem.getArray("Rect");
     if (Array.isArray(parentRect) && parentRect.length === 4) {

@@ -76,7 +76,7 @@ const ENABLE_PERMISSIONS_CLASS = "enablePermissions";
 const PagesCountLimit = {
   FORCE_SCROLL_MODE_PAGE: 15000,
   FORCE_LAZY_PAGE_INIT: 7500,
-  PAUSE_EAGER_PAGE_INIT: 500,
+  PAUSE_EAGER_PAGE_INIT: 250,
 };
 
 /**
@@ -1160,7 +1160,7 @@ class BaseViewer {
   }
 
   /**
-   * @typedef ScrollPageIntoViewParameters
+   * @typedef {Object} ScrollPageIntoViewParameters
    * @property {number} pageNumber - The page number.
    * @property {Array} [destArray] - The original PDF destination array, in the
    *   format: <page-ref> </XYZ|/FitXXX> <args..>
@@ -1541,7 +1541,7 @@ class BaseViewer {
       if (!pageView.pdfPage) {
         pageView.setPdfPage(pdfPage);
       }
-      if (!this.linkService._cachedPageNumber(pdfPage.ref)) {
+      if (!this.linkService._cachedPageNumber?.(pdfPage.ref)) {
         this.linkService.cachePageRef(pageView.id, pdfPage.ref);
       }
       return pdfPage;

@@ -18,11 +18,7 @@ import {
   FormatError,
   info,
   InvalidPDFException,
-  isArrayBuffer,
   isArrayEqual,
-  isBool,
-  isNum,
-  isString,
   OPS,
   PageActionEventType,
   RenderingIntentFlag,
@@ -36,16 +32,6 @@ import {
   warn,
 } from "../shared/util.js";
 import {
-  clearPrimitiveCaches,
-  Dict,
-  isDict,
-  isName,
-  isRef,
-  isStream,
-  Name,
-  Ref,
-} from "./primitives.js";
-import {
   collectActions,
   getInheritableProperty,
   isWhiteSpace,
@@ -54,13 +40,16 @@ import {
   XRefEntryException,
   XRefParseException,
 } from "./core_utils.js";
+import { Dict, isName, Name, Ref } from "./primitives.js";
 import { getXfaFontDict, getXfaFontName } from "./xfa_fonts.js";
-import { NullStream, Stream } from "./stream.js";
 import { AnnotationFactory } from "./annotation.js";
 import { BaseStream } from "./base_stream.js";
 import { calculateMD5 } from "./crypto.js";
 import { Catalog } from "./catalog.js";
+import { clearGlobalCaches } from "./cleanup_helper.js";
+import { DatasetReader } from "./dataset_reader.js";
 import { Linearization } from "./parser.js";
+import { NullStream } from "./stream.js";
 import { ObjectLoader } from "./object_loader.js";
 import { OperatorList } from "./operator_list.js";
 import { PartialEvaluator } from "./evaluator.js";
@@ -128,7 +117,7 @@ class Page {
     if (!Array.isArray(value)) {
       return value;
     }
-    if (value.length === 1 || !isDict(value[0])) {
+    if (value.length === 1 || !(value[0] instanceof Dict)) {
       return value[0];
     }
     return Dict.merge({ xref: this.xref, dictArray: value });
@@ -185,7 +174,7 @@ class Page {
 
   get userUnit() {
     let obj = this.pageDict.get("UserUnit");
-    if (!isNum(obj) || obj <= 0) {
+    if (typeof obj !== "number" || obj <= 0) {
       obj = DEFAULT_USER_UNIT;
     }
     return shadow(this, "userUnit", obj);
@@ -438,7 +427,6 @@ class Page {
   extractTextContent({
     handler,
     task,
-    normalizeWhitespace,
     includeMarkedContent,
     sink,
     combineTextItems,
@@ -469,10 +457,10 @@ class Page {
         stream: contentStream,
         task,
         resources: this.resources,
-        normalizeWhitespace,
         includeMarkedContent,
         combineTextItems,
         sink,
+        viewBox: this.view,
       });
     });
   }
@@ -637,14 +625,15 @@ function find(stream, signature, limit = 1024, backwards = false) {
  * The `PDFDocument` class holds all the (worker-thread) data of the PDF file.
  */
 class PDFDocument {
-  constructor(pdfManager, arg) {
-    let stream;
-    if (isStream(arg)) {
-      stream = arg;
-    } else if (isArrayBuffer(arg)) {
-      stream = new Stream(arg);
-    } else {
-      throw new Error("PDFDocument: Unknown argument type");
+  constructor(pdfManager, stream) {
+    if (
+      typeof PDFJSDev === "undefined" ||
+      PDFJSDev.test("!PRODUCTION || TESTING")
+    ) {
+      assert(
+        stream instanceof BaseStream,
+        'PDFDocument: Invalid "stream" argument.'
+      );
     }
     if (stream.length <= 0) {
       throw new InvalidPDFException(
@@ -832,7 +821,7 @@ class PDFDocument {
     });
   }
 
-  get xfaData() {
+  get _xfaStreams() {
     const acroForm = this.catalog.acroForm;
     if (!acroForm) {
       return null;
@@ -849,14 +838,9 @@ class PDFDocument {
       stylesheet: "",
       "/xdp:xdp": "",
     };
-    if (isStream(xfa) && !xfa.isEmpty) {
-      try {
-        entries["xdp:xdp"] = stringToUTF8String(xfa.getString());
-        return entries;
-      } catch (_) {
-        warn("XFA - Invalid utf-8 string.");
-        return null;
-      }
+    if (xfa instanceof BaseStream && !xfa.isEmpty) {
+      entries["xdp:xdp"] = xfa;
+      return entries;
     }
 
     if (!Array.isArray(xfa) || xfa.length === 0) {
@@ -877,17 +861,54 @@ class PDFDocument {
         continue;
       }
       const data = this.xref.fetchIfRef(xfa[i + 1]);
-      if (!isStream(data) || data.isEmpty) {
+      if (!(data instanceof BaseStream) || data.isEmpty) {
+        continue;
+      }
+      entries[name] = data;
+    }
+    return entries;
+  }
+
+  get xfaDatasets() {
+    const streams = this._xfaStreams;
+    if (!streams) {
+      return shadow(this, "xfaDatasets", null);
+    }
+    for (const key of ["datasets", "xdp:xdp"]) {
+      const stream = streams[key];
+      if (!stream) {
         continue;
       }
       try {
-        entries[name] = stringToUTF8String(data.getString());
+        const str = stringToUTF8String(stream.getString());
+        const data = { [key]: str };
+        return shadow(this, "xfaDatasets", new DatasetReader(data));
+      } catch (_) {
+        warn("XFA - Invalid utf-8 string.");
+        break;
+      }
+    }
+    return shadow(this, "xfaDatasets", null);
+  }
+
+  get xfaData() {
+    const streams = this._xfaStreams;
+    if (!streams) {
+      return null;
+    }
+    const data = Object.create(null);
+    for (const [key, stream] of Object.entries(streams)) {
+      if (!stream) {
+        continue;
+      }
+      try {
+        data[key] = stringToUTF8String(stream.getString());
       } catch (_) {
         warn("XFA - Invalid utf-8 string.");
         return null;
       }
     }
-    return entries;
+    return data;
   }
 
   get xfaFactory() {
@@ -924,10 +945,9 @@ class PDFDocument {
     const xfaImages = new Map();
     for (const key of keys) {
       const stream = xfaImagesDict.get(key);
-      if (!isStream(stream)) {
-        continue;
+      if (stream instanceof BaseStream) {
+        xfaImages.set(key, stream.getBytes());
       }
-      xfaImages.set(key, stream.getBytes());
     }
 
     this.xfaFactory.setImages(xfaImages);
@@ -1116,7 +1136,7 @@ class PDFDocument {
       const xfa = acroForm.get("XFA");
       formInfo.hasXfa =
         (Array.isArray(xfa) && xfa.length > 0) ||
-        (isStream(xfa) && !xfa.isEmpty);
+        (xfa instanceof BaseStream && !xfa.isEmpty);
 
       // The document contains AcroForm data if the `Fields` entry is a
       // non-empty array and it doesn't consist of only document signatures.
@@ -1141,18 +1161,6 @@ class PDFDocument {
   }
 
   get documentInfo() {
-    const DocumentInfoValidators = {
-      Title: isString,
-      Author: isString,
-      Subject: isString,
-      Keywords: isString,
-      Creator: isString,
-      Producer: isString,
-      CreationDate: isString,
-      ModDate: isString,
-      Trapped: isName,
-    };
-
     let version = this._version;
     if (
       typeof version !== "string" ||
@@ -1184,41 +1192,64 @@ class PDFDocument {
       }
       info("The document information dictionary is invalid.");
     }
+    if (!(infoDict instanceof Dict)) {
+      return shadow(this, "documentInfo", docInfo);
+    }
 
-    if (isDict(infoDict)) {
-      // Fill the document info with valid entries from the specification,
-      // as well as any existing well-formed custom entries.
-      for (const key of infoDict.getKeys()) {
-        const value = infoDict.get(key);
+    for (const key of infoDict.getKeys()) {
+      const value = infoDict.get(key);
 
-        if (DocumentInfoValidators[key]) {
-          // Make sure the (standard) value conforms to the specification.
-          if (DocumentInfoValidators[key](value)) {
-            docInfo[key] =
-              typeof value !== "string" ? value : stringToPDFString(value);
-          } else {
-            info(`Bad value in document info for "${key}".`);
+      switch (key) {
+        case "Title":
+        case "Author":
+        case "Subject":
+        case "Keywords":
+        case "Creator":
+        case "Producer":
+        case "CreationDate":
+        case "ModDate":
+          if (typeof value === "string") {
+            docInfo[key] = stringToPDFString(value);
+            continue;
           }
-        } else if (typeof key === "string") {
+          break;
+        case "Trapped":
+          if (value instanceof Name) {
+            docInfo[key] = value;
+            continue;
+          }
+          break;
+        default:
           // For custom values, only accept white-listed types to prevent
           // errors that would occur when trying to send non-serializable
           // objects to the main-thread (for example `Dict` or `Stream`).
           let customValue;
-          if (isString(value)) {
-            customValue = stringToPDFString(value);
-          } else if (isName(value) || isNum(value) || isBool(value)) {
-            customValue = value;
-          } else {
-            info(`Unsupported value in document info for (custom) "${key}".`);
-            continue;
+          switch (typeof value) {
+            case "string":
+              customValue = stringToPDFString(value);
+              break;
+            case "number":
+            case "boolean":
+              customValue = value;
+              break;
+            default:
+              if (value instanceof Name) {
+                customValue = value;
+              }
+              break;
           }
 
+          if (customValue === undefined) {
+            warn(`Bad value, for custom key "${key}", in Info: ${value}.`);
+            continue;
+          }
           if (!docInfo.Custom) {
             docInfo.Custom = Object.create(null);
           }
           docInfo.Custom[key] = customValue;
-        }
+          continue;
       }
+      warn(`Bad value, for key "${key}", in Info: ${value}.`);
     }
     return shadow(this, "documentInfo", docInfo);
   }
@@ -1264,7 +1295,7 @@ class PDFDocument {
   }
 
   async _getLinearizationPage(pageIndex) {
-    const { catalog, linearization } = this;
+    const { catalog, linearization, xref } = this;
     if (
       typeof PDFJSDev === "undefined" ||
       PDFJSDev.test("!PRODUCTION || TESTING")
@@ -1277,22 +1308,30 @@ class PDFDocument {
 
     const ref = Ref.get(linearization.objectNumberFirst, 0);
     try {
-      const obj = await this.xref.fetchAsync(ref);
+      const obj = await xref.fetchAsync(ref);
       // Ensure that the object that was found is actually a Page dictionary.
-      if (
-        isDict(obj, "Page") ||
-        (isDict(obj) && !obj.has("Type") && obj.has("Contents"))
-      ) {
-        if (ref && !catalog.pageKidsCountCache.has(ref)) {
-          catalog.pageKidsCountCache.put(ref, 1); // Cache the Page reference.
+      if (obj instanceof Dict) {
+        let type = obj.getRaw("Type");
+        if (type instanceof Ref) {
+          type = await xref.fetchAsync(type);
         }
-        return [obj, ref];
+        if (isName(type, "Page") || (!obj.has("Type") && !obj.has("Kids"))) {
+          if (!catalog.pageKidsCountCache.has(ref)) {
+            catalog.pageKidsCountCache.put(ref, 1); // Cache the Page reference.
+          }
+          // Help improve performance of the `Catalog.getPageIndex` method.
+          if (!catalog.pageIndexCache.has(ref)) {
+            catalog.pageIndexCache.put(ref, 0);
+          }
+
+          return [obj, ref];
+        }
       }
       throw new FormatError(
         "The Linearization dictionary doesn't point to a valid Page dictionary."
       );
     } catch (reason) {
-      info(reason);
+      warn(`_getLinearizationPage: "${reason.message}".`);
       return catalog.getPageDict(pageIndex);
     }
   }
@@ -1393,9 +1432,7 @@ class PDFDocument {
 
       let pagesTree;
       try {
-        pagesTree = await pdfManager.ensureCatalog("getAllPageDicts", [
-          recoveryMode,
-        ]);
+        pagesTree = await catalog.getAllPageDicts(recoveryMode);
       } catch (reasonAll) {
         if (reasonAll instanceof XRefEntryException && !recoveryMode) {
           throw new XRefParseException();
@@ -1443,7 +1480,7 @@ class PDFDocument {
   async cleanup(manuallyTriggered = false) {
     return this.catalog
       ? this.catalog.cleanup(manuallyTriggered)
-      : clearPrimitiveCaches();
+      : clearGlobalCaches();
   }
 
   /**
@@ -1552,7 +1589,12 @@ class PDFDocument {
       return shadow(this, "calculationOrderIds", null);
     }
 
-    const ids = calculationOrder.filter(isRef).map(ref => ref.toString());
+    const ids = [];
+    for (const id of calculationOrder) {
+      if (id instanceof Ref) {
+        ids.push(id.toString());
+      }
+    }
     if (ids.length === 0) {
       return shadow(this, "calculationOrderIds", null);
     }

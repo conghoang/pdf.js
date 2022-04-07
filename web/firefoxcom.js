@@ -218,6 +218,7 @@ class MozL10n {
     "findcasesensitivitychange",
     "findentirewordchange",
     "findbarclose",
+    "finddiacriticmatchingchange",
   ];
   const findLen = "find".length;
 
@@ -238,6 +239,7 @@ class MozL10n {
       entireWord: !!detail.entireWord,
       highlightAll: !!detail.highlightAll,
       findPrevious: !!detail.findPrevious,
+      matchDiacritics: !!detail.matchDiacritics,
     });
   };
 
@@ -380,10 +382,6 @@ class FirefoxExternalServices extends DefaultExternalServices {
     FirefoxCom.requestSync("initPassiveLoading", null);
   }
 
-  static async fallback(data) {
-    return FirefoxCom.requestAsync("fallback", data);
-  }
-
   static reportTelemetry(data) {
     FirefoxCom.request("reportTelemetry", JSON.stringify(data));
   }
@@ -439,7 +437,7 @@ document.mozL10n.setExternalLocalizerServices({
   },
 
   getStrings(key) {
-    return FirefoxCom.requestSync("getStrings", key);
+    return FirefoxCom.requestSync("getStrings", null);
   },
 });
 
